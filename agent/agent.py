@@ -18,7 +18,9 @@ from settings import (
     BUFFER_NORM_FACTOR,
     CHUNK_TIL_VIDEO_END_CAP,
     M_IN_K,
+    OFFLINE_RL_MODEL_PATH,
     PAST_K,
+    RL_MODEL_PATH,
     SFT_MODEL_PATH,
 )
 
@@ -156,16 +158,27 @@ netllm_agent = NetLLMABR(
     lora_rank=128,
 )
 
-loaded_sft_path = load_netllm_checkpoint(
-    netllm_agent,
-    SFT_MODEL_PATH,
-    map_location=DEVICE,
-    strict=False,
-)
-if loaded_sft_path is not None:
-    print(f"[System] loaded SFT weights: {loaded_sft_path}")
-else:
-    print("[System] SFT weights not found; using randomly initialized adapters and head.")
+ACTIVE_POLICY_NAME = "random-init"
+ACTIVE_POLICY_PATH = None
+for policy_name, checkpoint_path in (
+    ("netllm-rl", RL_MODEL_PATH),
+    ("netllm-offline-rl", OFFLINE_RL_MODEL_PATH),
+    ("netllm-sft", SFT_MODEL_PATH),
+):
+    loaded_path = load_netllm_checkpoint(
+        netllm_agent,
+        checkpoint_path,
+        map_location=DEVICE,
+        strict=False,
+    )
+    if loaded_path is not None:
+        ACTIVE_POLICY_NAME = policy_name
+        ACTIVE_POLICY_PATH = loaded_path
+        print(f"[System] loaded {policy_name} weights: {loaded_path}")
+        break
+
+if ACTIVE_POLICY_PATH is None:
+    print("[System] RL/OfflineRL/SFT weights not found; using randomly initialized adapters and head.")
 
 netllm_agent.to(DEVICE)
 netllm_agent.eval()
@@ -183,6 +196,10 @@ async def health():
         "status": "ok",
         "device": str(DEVICE),
         "base_model": str(BASE_MODEL_PATH),
+        "active_policy": ACTIVE_POLICY_NAME,
+        "active_policy_path": str(ACTIVE_POLICY_PATH) if ACTIVE_POLICY_PATH else None,
+        "rl_model": str(RL_MODEL_PATH),
+        "offline_rl_model": str(OFFLINE_RL_MODEL_PATH),
         "sft_model": str(SFT_MODEL_PATH),
         "target_return": TARGET_RETURN,
         "rtg": RTG_PROCESSOR.describe(),

@@ -261,6 +261,26 @@ def sft_stats_path(config, paths):
     return run_path
 
 
+def offline_rl_checkpoint_path(config, paths):
+    offline = section(config, "offline_rl")
+    run_path = paths.checkpoints / offline.get("save_name", "offline_rl")
+    if run_path.exists():
+        return run_path
+    configured = offline.get("model_path")
+    if configured:
+        return agent_path(configured)
+    return run_path
+
+
+def rl_initial_checkpoint_path(config, paths):
+    offline = section(config, "offline_rl")
+    if bool(offline.get("enabled", False)):
+        candidate = offline_rl_checkpoint_path(config, paths)
+        if Path(candidate).exists():
+            return candidate
+    return sft_checkpoint_path(config, paths)
+
+
 def rl_checkpoint_path(config, paths):
     rl = section(config, "rl")
     run_path = paths.checkpoints / rl.get("save_name", "rl")
@@ -272,11 +292,22 @@ def rl_checkpoint_path(config, paths):
     return run_path
 
 
+def pensieve_checkpoint_path(config, paths):
+    pensieve = section(config, "pensieve")
+    run_path = paths.checkpoints / pensieve.get("save_name", "pensieve")
+    if run_path.exists():
+        return run_path
+    configured = pensieve.get("model_path")
+    if configured:
+        return agent_path(configured)
+    return run_path
+
+
 def train_sft_stage(config, paths, data_path):
     from sft_trainer import train_sft
 
     sft = section(config, "sft")
-    return train_sft(
+    run_checkpoint = train_sft(
         data_path=data_path,
         model_save_path=paths.checkpoints / sft.get("save_name", "sft"),
         epochs=int(sft.get("epochs", 20)),
@@ -306,15 +337,105 @@ def train_sft_stage(config, paths, data_path):
         history_save_path=paths.eval / "sft_validation_history.json",
         base_model_path=model_path(config),
     )
+    configured = sft.get("model_path")
+    if configured:
+        synced_path = sync_checkpoint_dir(run_checkpoint, agent_path(configured))
+        if synced_path is not None:
+            print(f"[Train] synced SFT best checkpoint -> {synced_path}")
+    return run_checkpoint
+
+
+def train_offline_rl_stage(config, paths, data_path):
+    from offline_rl_trainer import train_offline_rl
+
+    offline = section(config, "offline_rl")
+    run_checkpoint = train_offline_rl(
+        data_path=data_path,
+        sft_model_path=sft_checkpoint_path(config, paths),
+        model_save_path=paths.checkpoints / offline.get("save_name", "offline_rl"),
+        epochs=int(offline.get("epochs", 8)),
+        accumulation_steps=int(offline.get("accumulation_steps", 8)),
+        lr=float(offline.get("lr", 5e-5)),
+        weight_decay=float(offline.get("weight_decay", 1e-4)),
+        warmup_steps=int(offline.get("warmup_steps", 200)),
+        grad_clip=float(offline.get("grad_clip", 0.25)),
+        max_length=int(common(config, "window", 20)),
+        sample_step=int(common(config, "sample_step", 5)),
+        target_return_scale=float(offline.get("target_return_scale", common(config, "target_return_scale", 1.0))),
+        class_weight_power=float(offline.get("class_weight_power", 0.1)),
+        max_class_weight=float(offline.get("max_class_weight", 2.5)),
+        high_return_weight=float(offline.get("high_return_weight", 0.35)),
+        train_scope=offline.get("train_scope", "non_plm_lora"),
+        validation_episodes=int(offline.get("validation_episodes", validation(config, "episodes", 10))),
+        validation_split=offline.get("validation_split", validation(config, "split", common(config, "trace_split", "train"))),
+        validation_trace_dir=offline.get("validation_trace_dir", validation(config, "trace_dir", common(config, "trace_dir", None))),
+        validation_sample_mode=offline.get("validation_sample_mode", validation(config, "sample_mode", "stratified")),
+        validation_seed=int(offline.get("validation_seed", validation(config, "seed", 20260507))),
+        validation_qoe_profile=common(config, "qoe_profile", "pensieve"),
+        validation_jump_limit=int(offline.get("validation_jump_limit", 1)),
+        validation_batch_size=int(offline.get("validation_batch_size", 8)),
+        validation_min_delta=float(offline.get("validation_min_delta", 1e-3)),
+        early_stop_patience=int(offline.get("early_stop_patience", 3)),
+        min_epochs=int(offline.get("min_epochs", 2)),
+        progress_interval=int(offline.get("progress_interval", 100)),
+        validation_progress_interval=int(offline.get("validation_progress_interval", 0)),
+        stats_save_path=paths.data / offline.get("stats_name", section(config, "sft").get("stats_name", "training_stats.json")),
+        history_save_path=paths.eval / "offline_rl_validation_history.json",
+        base_model_path=model_path(config),
+    )
+    configured = offline.get("model_path")
+    if configured:
+        synced_path = sync_checkpoint_dir(run_checkpoint, agent_path(configured))
+        if synced_path is not None:
+            print(f"[Train] synced OfflineRL best checkpoint -> {synced_path}")
+    return run_checkpoint
+
+
+def train_pensieve_stage(config, paths):
+    from pensieve_trainer import train_pensieve
+
+    pensieve = section(config, "pensieve")
+    run_checkpoint = train_pensieve(
+        model_save_path=paths.checkpoints / pensieve.get("save_name", "pensieve"),
+        pretrain_episodes=int(pensieve.get("pretrain_episodes", 300)),
+        pretrain_lr=float(pensieve.get("pretrain_lr", pensieve.get("lr", 1e-4))),
+        episodes=int(pensieve.get("episodes", 2000)),
+        lr=float(pensieve.get("lr", 1e-4)),
+        gamma=float(pensieve.get("gamma", 0.99)),
+        value_coef=float(pensieve.get("value_coef", 0.5)),
+        entropy_coef=float(pensieve.get("entropy_coef", 0.01)),
+        grad_clip=float(pensieve.get("grad_clip", 0.5)),
+        qoe_profile=common(config, "qoe_profile", "pensieve"),
+        trace_split=pensieve.get("trace_split", common(config, "trace_split", "train")),
+        trace_dir=pensieve.get("trace_dir", common(config, "trace_dir", None)),
+        seed=int(pensieve.get("seed", 100003)),
+        eval_interval=int(pensieve.get("eval_interval", 100)),
+        validation_episodes=int(pensieve.get("validation_episodes", validation(config, "episodes", 30))),
+        validation_split=pensieve.get("validation_split", validation(config, "split", common(config, "trace_split", "train"))),
+        validation_trace_dir=pensieve.get("validation_trace_dir", validation(config, "trace_dir", common(config, "trace_dir", None))),
+        validation_sample_mode=pensieve.get("validation_sample_mode", validation(config, "sample_mode", "stratified")),
+        validation_seed=int(pensieve.get("validation_seed", validation(config, "seed", 20260507))),
+        early_stop_patience=int(pensieve.get("early_stop_patience", 8)),
+        min_episodes=int(pensieve.get("min_episodes", 400)),
+        progress_interval=int(pensieve.get("progress_interval", 20)),
+        history_save_path=paths.eval / "pensieve_validation_history.json",
+    )
+    configured = pensieve.get("model_path")
+    if configured:
+        synced_path = sync_checkpoint_dir(run_checkpoint, agent_path(configured))
+        if synced_path is not None:
+            print(f"[Train] synced Pensieve checkpoint -> {synced_path}")
+    return run_checkpoint
 
 
 def train_rl_stage(config, paths):
     from rl_trainer import train_rl
 
     rl = section(config, "rl")
-    sft = section(config, "sft")
+    init_checkpoint = rl_initial_checkpoint_path(config, paths)
+    print(f"[Train] RL init checkpoint={init_checkpoint}")
     run_checkpoint = train_rl(
-        sft_model_path=sft_checkpoint_path(config, paths),
+        sft_model_path=init_checkpoint,
         rl_save_path=paths.checkpoints / rl.get("save_name", "rl"),
         episodes=int(rl.get("episodes", 200)),
         lr=float(rl.get("lr", 1e-5)),
@@ -370,9 +491,9 @@ def evaluate_stage(config, paths):
     from evaluate import run_evaluation
 
     eval_cfg = section(config, "eval")
-    sft = section(config, "sft")
-    rl = section(config, "rl")
-    for name in ("smoke", "final"):
+    for name, item in eval_cfg.items():
+        if not isinstance(item, dict):
+            continue
         item = section(eval_cfg, name)
         if not item.get("enabled", False):
             continue
@@ -390,7 +511,9 @@ def evaluate_stage(config, paths):
             chunk_size_path=agent_path(get_nested(config, ("env", "chunk_size_path"), None)),
             output=paths.eval / item.get("output_name", f"evaluation_{name}.json"),
             sft_model_path=sft_checkpoint_path(config, paths),
+            offline_rl_model_path=offline_rl_checkpoint_path(config, paths),
             rl_model_path=rl_checkpoint_path(config, paths),
+            pensieve_model_path=pensieve_checkpoint_path(config, paths),
             stats_path=sft_stats_path(config, paths),
             base_model_path=model_path(config),
             env_verbose=bool(get_nested(config, ("env", "env_verbose"), False)),
@@ -439,12 +562,29 @@ def run_pipeline(args):
             manifest["sft_model_path"] = str(sft_checkpoint_path(config, paths))
             write_json(paths.manifest, manifest)
 
+        if stage_in(args.stage, "offline_rl") and bool(section(config, "offline_rl").get("enabled", False)):
+            if not Path(data_path).exists():
+                raise FileNotFoundError(f"Offline RL data not found: {data_path}")
+            print(f"[Train] OfflineRL data={data_path}")
+            train_offline_rl_stage(config, paths, data_path)
+            manifest["offline_rl_model_path"] = str(offline_rl_checkpoint_path(config, paths))
+            manifest["sft_model_path"] = str(sft_checkpoint_path(config, paths))
+            manifest["stats_path"] = str(sft_stats_path(config, paths))
+            write_json(paths.manifest, manifest)
+
         if stage_in(args.stage, "rl") and bool(section(config, "rl").get("enabled", False)):
             print("[Train] RL start")
             train_rl_stage(config, paths)
             manifest["rl_model_path"] = str(rl_checkpoint_path(config, paths))
+            manifest["offline_rl_model_path"] = str(offline_rl_checkpoint_path(config, paths))
             manifest["sft_model_path"] = str(sft_checkpoint_path(config, paths))
             manifest["stats_path"] = str(sft_stats_path(config, paths))
+            write_json(paths.manifest, manifest)
+
+        if stage_in(args.stage, "pensieve") and bool(section(config, "pensieve").get("enabled", False)):
+            print("[Train] Pensieve baseline start")
+            train_pensieve_stage(config, paths)
+            manifest["pensieve_model_path"] = str(pensieve_checkpoint_path(config, paths))
             write_json(paths.manifest, manifest)
 
         if stage_in(args.stage, "eval", "evaluate") and bool(section(config, "eval").get("enabled", True)):
@@ -461,7 +601,7 @@ def parse_args():
     parser.add_argument(
         "--stage",
         default="all",
-        choices=["plan", "all", "collect", "sft", "rl", "eval", "evaluate"],
+        choices=["plan", "all", "collect", "sft", "offline_rl", "rl", "pensieve", "eval", "evaluate"],
         help="Pipeline stage to run.",
     )
     parser.add_argument("--run-id", default=None, help="Name for a run under agent/runs.")

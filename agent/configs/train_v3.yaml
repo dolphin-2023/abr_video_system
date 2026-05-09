@@ -64,6 +64,27 @@ sft:
   progress_interval: 100
   validation_progress_interval: 0
 
+offline_rl:
+  enabled: true
+  save_name: offline_rl
+  stats_name: training_stats.json
+  model_path: models/netllm_offline_rl
+  epochs: 8
+  min_epochs: 2
+  early_stop_patience: 3
+  lr: 5.0e-5
+  weight_decay: 1.0e-4
+  warmup_steps: 200
+  train_scope: non_plm_lora
+  class_weight_power: 0.1
+  max_class_weight: 2.5
+  high_return_weight: 0.35
+  target_return_scale: 1.0
+  validation_episodes: 30
+  validation_batch_size: 8
+  progress_interval: 100
+  validation_progress_interval: 0
+
 rl:
   enabled: true
   save_name: rl
@@ -92,6 +113,24 @@ rl:
   save_candidates: true
   progress_interval: 10
 
+pensieve:
+  enabled: true
+  save_name: pensieve
+  model_path: models/pensieve_torch
+  pretrain_episodes: 300
+  pretrain_lr: 1.0e-4
+  episodes: 2000
+  min_episodes: 400
+  eval_interval: 100
+  validation_episodes: 30
+  lr: 1.0e-4
+  gamma: 0.99
+  value_coef: 0.5
+  entropy_coef: 0.01
+  grad_clip: 0.5
+  early_stop_patience: 8
+  progress_interval: 20
+
 eval:
   enabled: true
   smoke:
@@ -100,7 +139,7 @@ eval:
     trace_split: test
     episodes: 20
     sample_mode: stratified
-    policies: [bola, mpc, random, netllm-sft, netllm-rl]
+    policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
     progress_interval: 10
   final:
     enabled: true
@@ -108,5 +147,23 @@ eval:
     trace_split: test
     episodes: 100
     sample_mode: stratified
-    policies: [bola, mpc, random, netllm-sft, netllm-rl]
+    policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
+    progress_interval: 10
+  external_puffer_recent:
+    enabled: true
+    output_name: evaluation_external_puffer_recent.json
+    trace_split: external_puffer_recent
+    trace_dir:
+    episodes: 300
+    sample_mode: stratified
+    policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
+    progress_interval: 10
+  external_weak_mobile:
+    enabled: true
+    output_name: evaluation_external_weak_mobile.json
+    trace_split: external_weak_mobile
+    trace_dir:
+    episodes: 252
+    sample_mode: stratified
+    policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
     progress_interval: 10

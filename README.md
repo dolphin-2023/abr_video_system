@@ -1,99 +1,182 @@
 # ABR Video System
 
-基于智能体的自适应码率视频传输演示与实验系统。项目把视频上传转码、网络限速模拟、浏览器播放、NetLLM-style 码率决策、离线训练和评估放在同一个工程里，便于毕设演示和论文实验复现。
+基于智能体的自适应码率视频传输实验系统。当前训练链路是：
+
+```text
+collect -> sft -> offline_rl -> rl -> pensieve -> eval
+```
+
+项目包含真实网络 trace 仿真、NetLLM-style ABR 模型、SFT、NetLLM-style offline RL、在线 RL、PyTorch Pensieve baseline、统一评测，以及本地上传转码和播放演示系统。
 
 ## 目录结构
 
 ```text
-agent/          ABR 智能体、训练、评估和在线决策服务
-processor/      MP4 上传与 DASH 转码服务，默认端口 8080
-simulator/      带宽 trace 限速代理，默认端口 8082
-web/            浏览器播放和指标可视化页面，默认端口 3000
-start_system.py 一键启动本地演示服务
+agent/          ABR 环境、模型、训练、评测和在线决策服务
+origin_traces/  原始 trace 数据和外部数据导入工具
+simulator/      trace 驱动的限速代理与标准 trace split
+processor/      MP4 上传与 DASH 转码服务
+web/            播放页面与指标可视化
+docs/           数据边界、测试命令和论文写作辅助说明
+scripts/        本地维护脚本
+tests/          轻量单元测试
 ```
 
-`simulator/traces/real_world_split/` 保留了已整理的 train/test trace，可直接用于演示和离线评估。原始 trace、上传视频、DASH 输出、训练 run、模型 checkpoint 和论文材料属于本地/实验产物，不纳入 GitHub 仓库。
+## 环境
 
-## 环境准备
-
-建议在单独的 conda 环境中运行：
+推荐使用你的本地环境：
 
 ```powershell
-conda activate myenv
-pip install -r requirements.txt
+D:\Software\miniforge3\envs\myenv\python.exe --version
+D:\Software\miniforge3\envs\myenv\python.exe -m pip install -r requirements.txt
 ```
 
-系统还需要能直接调用：
+默认本地大模型路径：
 
 ```text
-ffmpeg
-ffprobe
+D:\ai-models\qwen3.5-4b-base
 ```
 
-智能体默认读取本地大模型路径 `D:\ai-models\qwen3.5-4b-base`。如需换路径，可以设置环境变量：
+需要替换时可以设置：
 
 ```powershell
 $env:ABR_LLM_PATH="D:\path\to\your\model"
 ```
 
-## 启动演示
+## 训练
+
+查看计划，不开始训练：
 
 ```powershell
-python start_system.py
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage plan --run-id plan_check
 ```
 
-启动后打开：
-
-```text
-http://127.0.0.1:3000/
-```
-
-服务端口：
-
-```text
-processor  8080  上传 MP4 并转成 DASH
-agent      8081  根据播放状态输出下一个码率档位
-simulator  8082  按真实 trace 限速代理视频分片
-web        3000  播放页面与指标图表
-```
-
-## 实验入口
-
-训练和评估入口见 `agent/readme.md`。常用流程：
+完整训练：
 
 ```powershell
-python agent\train.py --stage plan
-python agent\train.py --stage all --run-id train_v3_next
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage all --run-id train_v3_full
 ```
 
-实验输出统一进入：
+分阶段训练：
+
+```powershell
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage collect --run-id train_v3_full
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage sft --run-id train_v3_full
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage offline_rl --run-id train_v3_full
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage rl --run-id train_v3_full
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage pensieve --run-id train_v3_full
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage eval --run-id train_v3_full
+```
+
+默认配置：
+
+```text
+agent/configs/train_v3.yaml
+```
+
+训练输出：
 
 ```text
 agent/runs/<run_id>/
 ```
 
-正式模型 checkpoint 可放在：
+正式 checkpoint 会同步或手动放入：
 
 ```text
 agent/models/netllm_sft/
+agent/models/netllm_offline_rl/
 agent/models/netllm_rl/
+agent/models/pensieve_torch/
 ```
 
-这些目录已在 `.gitignore` 中忽略，避免把本地大文件误提交到 GitHub。
+## 外部测试集
 
-## 可清理内容
-
-可以随时重新生成并清理：
+你下载的新外部数据位于：
 
 ```text
-__pycache__/
-processor/uploads/
-processor/dash_output/
-agent/runs/
-agent/logs/
-agent/models/netllm_sft/
-agent/models/netllm_rl/
-origin_traces/
+origin_traces/new/Puffer/
+origin_traces/new/A Large-Scale Dataset of 4G, NB-IoT, and 5G Non-Standalone Network Measurements/
+origin_traces/new/Beyond Throughput a 4G LTE Dataset with Channel and Context Metrics/
 ```
 
-当前仓库保留 `agent/models/training_stats.json` 和 `agent/models/chunk_sizes.json`，用于演示和评估时保持 return-to-go 与 chunk size 配置稳定。
+重新生成外部测试 split：
+
+```powershell
+D:\Software\miniforge3\envs\myenv\python.exe origin_traces\import_external_datasets.py --clear --max-traces 300 --min-seconds 90
+```
+
+输出：
+
+```text
+simulator/traces/external_puffer_recent/   300 条近期 Puffer 分桶抽样 trace
+simulator/traces/external_weak_mobile/     252 条弱网/移动网络 trace
+```
+
+处理策略：
+
+```text
+Puffer: 按 (session_id, index, channel) 分流；delivery_rate 从 bytes/s 转 Kbps；按中位吞吐分桶抽样。
+PERFORM: 读取 Current Netw. DL / Mean Netw. DL / 5G PDSCH Throughput / LTE PDSCH Throughput，按 Kbps 处理。
+LTE: 只保留 State == D 且 DL_bitrate > 0 的连续下载段。
+```
+
+这两个 split 只用于外部测试，不参与训练。
+
+单独评测外部集：
+
+```powershell
+D:\Software\miniforge3\envs\myenv\python.exe agent\evaluate.py --trace-split external_puffer_recent --episodes 300 --sample-mode stratified --policies all --output agent\runs\external_eval\puffer_recent_all.json
+D:\Software\miniforge3\envs\myenv\python.exe agent\evaluate.py --trace-split external_weak_mobile --episodes 252 --sample-mode stratified --policies all --output agent\runs\external_eval\weak_mobile_all.json
+```
+
+## 评测策略
+
+统一评测入口支持：
+
+```text
+bola
+mpc
+random
+pensieve
+netllm-sft
+netllm-offline-rl
+netllm-rl
+all
+```
+
+`train.py --stage eval` 会读取配置并评测内部 test、近期 Puffer 外部集、弱网移动外部集。
+
+## 快速检查
+
+```powershell
+D:\Software\miniforge3\envs\myenv\python.exe -m compileall -q agent origin_traces processor simulator start_system.py
+D:\Software\miniforge3\envs\myenv\python.exe -m unittest discover -s tests -p "test_*.py"
+D:\Software\miniforge3\envs\myenv\python.exe agent\train.py --stage plan --run-id plan_check
+```
+
+## 演示系统
+
+```powershell
+D:\Software\miniforge3\envs\myenv\python.exe start_system.py
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:3000/
+```
+
+## 清理
+
+清理缓存和运行产物：
+
+```powershell
+.\scripts\clean_generated.ps1
+```
+
+只有确认模型 checkpoint 已备份后，才使用：
+
+```powershell
+.\scripts\clean_generated.ps1 -IncludeModels
+```
+
+清理脚本不应删除 `origin_traces/` 或 `simulator/traces/`。

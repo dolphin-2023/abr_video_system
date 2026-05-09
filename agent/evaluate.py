@@ -14,10 +14,13 @@ from settings import (
     ACTION_DIM,
     BASE_MODEL_PATH,
     M_IN_K,
+    OFFLINE_RL_MODEL_PATH,
+    PENSIEVE_MODEL_PATH,
     RL_MODEL_PATH,
     SFT_MODEL_PATH,
 )
 from trace_utils import sample_trace_files
+from pensieve_torch import PensieveTorchPolicy
 
 
 def harmonic_throughput_kbps(state_matrix):
@@ -181,7 +184,9 @@ def make_policy(
     seed=0,
     device=None,
     sft_model_path=SFT_MODEL_PATH,
+    offline_rl_model_path=OFFLINE_RL_MODEL_PATH,
     rl_model_path=RL_MODEL_PATH,
+    pensieve_model_path=PENSIEVE_MODEL_PATH,
     stats_path=None,
     base_model_path=BASE_MODEL_PATH,
 ):
@@ -192,11 +197,25 @@ def make_policy(
         return BolaPolicy()
     if normalized == "mpc":
         return MpcPolicy()
+    if normalized in {"pensieve", "pensieve-torch", "pensieve_torch"}:
+        return PensieveTorchPolicy(
+            model_path=pensieve_model_path,
+            device=device,
+            deterministic=True,
+        )
     if normalized in {"netllm-sft", "sft"}:
         return NetLLMSFTPolicy(
             model_path=sft_model_path,
             device=device,
             policy_name="netllm-sft",
+            stats_path=stats_path,
+            base_model_path=base_model_path,
+        )
+    if normalized in {"netllm-offline-rl", "offline-rl", "offline_rl"}:
+        return NetLLMSFTPolicy(
+            model_path=offline_rl_model_path,
+            device=device,
+            policy_name="netllm-offline-rl",
             stats_path=stats_path,
             base_model_path=base_model_path,
         )
@@ -369,7 +388,9 @@ def run_evaluation(
     chunk_size_path=None,
     output=Path("models") / "evaluation_summary.json",
     sft_model_path=SFT_MODEL_PATH,
+    offline_rl_model_path=OFFLINE_RL_MODEL_PATH,
     rl_model_path=RL_MODEL_PATH,
+    pensieve_model_path=PENSIEVE_MODEL_PATH,
     stats_path=None,
     base_model_path=BASE_MODEL_PATH,
     env_verbose=False,
@@ -398,7 +419,7 @@ def run_evaluation(
 
     policies = list(policies or ["bola", "mpc", "random"])
     if "all" in {item.lower() for item in policies}:
-        policies = ["bola", "mpc", "random", "netllm-sft", "netllm-rl"]
+        policies = ["bola", "mpc", "random", "pensieve", "netllm-sft", "netllm-offline-rl", "netllm-rl"]
 
     summaries = []
     details = {}
@@ -412,7 +433,9 @@ def run_evaluation(
             seed=seed + idx,
             device=device,
             sft_model_path=sft_model_path,
+            offline_rl_model_path=offline_rl_model_path,
             rl_model_path=rl_model_path,
+            pensieve_model_path=pensieve_model_path,
             stats_path=stats_path,
             base_model_path=base_model_path,
         )
@@ -471,7 +494,7 @@ def parse_args():
         "--policies",
         nargs="+",
         default=["bola", "mpc", "random"],
-        help="Available: bola mpc random netllm-sft netllm-rl all",
+        help="Available: bola mpc random pensieve netllm-sft netllm-offline-rl netllm-rl all",
     )
     parser.add_argument("--seed", type=int, default=20260507)
     parser.add_argument("--device", default=None)
@@ -484,7 +507,9 @@ def parse_args():
     parser.add_argument("--video-id", default=None, help="Optional DASH video id for real chunk sizes.")
     parser.add_argument("--chunk-size-path", default=None, help="Optional precomputed chunk_sizes.json.")
     parser.add_argument("--sft-model-path", default=SFT_MODEL_PATH)
+    parser.add_argument("--offline-rl-model-path", default=OFFLINE_RL_MODEL_PATH)
     parser.add_argument("--rl-model-path", default=RL_MODEL_PATH)
+    parser.add_argument("--pensieve-model-path", default=PENSIEVE_MODEL_PATH)
     parser.add_argument("--stats-path", default=None)
     parser.add_argument("--base-model-path", default=BASE_MODEL_PATH)
     parser.add_argument("--env-verbose", action="store_true")
@@ -508,7 +533,9 @@ def main():
         chunk_size_path=args.chunk_size_path,
         output=args.output,
         sft_model_path=args.sft_model_path,
+        offline_rl_model_path=args.offline_rl_model_path,
         rl_model_path=args.rl_model_path,
+        pensieve_model_path=args.pensieve_model_path,
         stats_path=args.stats_path,
         base_model_path=args.base_model_path,
         env_verbose=args.env_verbose,

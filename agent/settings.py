@@ -11,7 +11,9 @@ BASE_MODEL_PATH = Path(
 
 MODEL_DIR = AGENT_DIR / "models"
 SFT_MODEL_PATH = MODEL_DIR / "netllm_sft"
+OFFLINE_RL_MODEL_PATH = MODEL_DIR / "netllm_offline_rl"
 RL_MODEL_PATH = MODEL_DIR / "netllm_rl"
+PENSIEVE_MODEL_PATH = MODEL_DIR / "pensieve_torch"
 LEGACY_SFT_MODEL_PATH = MODEL_DIR / "netllm_sft.pth"
 LEGACY_RL_MODEL_PATH = MODEL_DIR / "netllm_rl.pth"
 TRAINING_STATS_PATH = MODEL_DIR / "training_stats.json"

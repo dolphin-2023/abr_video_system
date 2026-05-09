@@ -19,7 +19,9 @@ agent/ppo_abr_tensorboard/
 
 # Large local model/data artifacts: keep them locally, do not commit by accident.
 agent/models/netllm_sft/
+agent/models/netllm_offline_rl/
 agent/models/netllm_rl/
+agent/models/pensieve_torch/
 agent/models/*.pth
 agent/models/*.pt
 agent/models/*.bin
@@ -27,10 +29,14 @@ agent/models/*.safetensors
 agent/expert_*.npz
 agent/expert_*.stats.json
 origin_traces/
+simulator/traces/real_world/
+simulator/traces/external_*/
 
 # Local documents and papers
 *.pdf
 *.docx
+docs/references/
+docs/thesis/
 
 # Local shortcuts, environments, and OS files
 *.lnk

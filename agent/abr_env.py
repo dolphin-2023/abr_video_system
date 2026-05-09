@@ -338,6 +338,10 @@ class ABREnv(gym.Env):
             or os.environ.get("ABR_TRACE_SPLIT", "train")
         )
         split_name = str(split_name).strip().lower() or "train"
+        direct_split_dir = os.path.join(project_root, "simulator", "traces", split_name)
+        if os.path.isdir(direct_split_dir):
+            return os.path.abspath(direct_split_dir)
+
         split_dir = os.path.join(project_root, "simulator", "traces", "real_world_split", split_name)
         if os.path.isdir(split_dir):
             return os.path.abspath(split_dir)

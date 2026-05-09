@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abr-video-system"
+version = "0.1.0"
+description = "Agent-based adaptive bitrate video streaming system for local experiments."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
+  "httpx",
+  "numpy",
+  "pandas",
+  "gymnasium",
+  "torch",
+  "transformers",
+  "peft",
+  "safetensors",
+  "PyYAML",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+  "origin_traces",
+  "simulator/traces",
+  "agent/runs",
+  "processor/uploads",
+  "processor/dash_output",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+omit = [
+  "origin_traces/*",
+  "simulator/traces/*",
+  "agent/runs/*",
+]
