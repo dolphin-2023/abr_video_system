@@ -28,7 +28,11 @@ agent/models/*.bin
 agent/models/*.safetensors
 agent/expert_*.npz
 agent/expert_*.stats.json
-origin_traces/
+origin_traces/*
+!origin_traces/import_external_datasets.py
+!origin_traces/process_puffer.py
+!origin_traces/process_traces.py
+!origin_traces/readme.md
 simulator/traces/real_world/
 simulator/traces/external_*/
 
