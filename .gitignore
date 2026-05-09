@@ -1,0 +1,41 @@
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Generated videos
+processor/uploads/
+processor/dash_output/
+
+# Generated experiment outputs
+agent/runs/
+agent/logs/
+agent/models/evaluation_*.json
+agent/models/*validation_history.json
+agent/models/sft_val_traces_*.txt
+agent/models/logs/
+agent/ppo_abr_tensorboard/
+
+# Large local model/data artifacts: keep them locally, do not commit by accident.
+agent/models/netllm_sft/
+agent/models/netllm_rl/
+agent/models/*.pth
+agent/models/*.pt
+agent/models/*.bin
+agent/models/*.safetensors
+agent/expert_*.npz
+agent/expert_*.stats.json
+origin_traces/
+
+# Local documents and papers
+*.pdf
+*.docx
+
+# Local shortcuts, environments, and OS files
+*.lnk
+.env
+.venv/
+venv/
+.DS_Store
+Thumbs.db

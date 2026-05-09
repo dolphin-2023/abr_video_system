@@ -1,0 +1,112 @@
+run:
+  name: train_v3
+  root: runs
+  log_to_file: true
+  log_name: train.log
+
+env:
+  llm_path: D:/ai-models/qwen3.5-4b-base
+  chunk_size_path: models/chunk_sizes.json
+  env_verbose: false
+
+runtime:
+  torch_num_threads:
+  torch_num_interop_threads:
+  gradient_checkpointing: true
+
+common:
+  qoe_profile: pensieve
+  trace_split: train
+  trace_dir:
+  window: 20
+  sample_step: 5
+  target_return_scale: 1.0
+
+validation:
+  episodes: 30
+  split: train
+  trace_dir:
+  sample_mode: stratified
+  seed: 20260507
+
+data:
+  reuse_existing: false
+  progress_interval: 10
+  combined_name: expert_combined.npz
+  general:
+    enabled: true
+    save_name: expert_general.npz
+    episodes: 160
+    expert_policy: mixed
+    mpc_ratio: 0.5
+    high_bitrate_ratio: 0.0
+    trace_filter: all
+  high:
+    enabled: true
+    save_name: expert_high.npz
+    episodes: 60
+    expert_policy: high-mpc
+    trace_filter: high-bandwidth
+    min_mean_throughput_kbps: 5000
+    high_bandwidth_percentile: 70
+
+sft:
+  save_name: sft
+  stats_name: training_stats.json
+  model_path: models/netllm_sft
+  stats_path: models/training_stats.json
+  epochs: 12
+  min_epochs: 2
+  early_stop_patience: 3
+  class_weight_power: 0.2
+  max_class_weight: 3.0
+  validation_episodes: 10
+  progress_interval: 100
+  validation_progress_interval: 0
+
+rl:
+  enabled: true
+  save_name: rl
+  model_path: models/netllm_rl
+  episodes: 200
+  eval_interval: 20
+  validation_episodes: 30
+  validation_batch_size: 8
+  rollout_batch_size: 2
+  min_episodes: 120
+  early_stop_patience: 5
+  action_jump_limit: 1
+  entropy_coef: 0.01
+  kl_coef: 0.001
+  train_scope: non_plm_lora
+  train_history_action_embedding: true
+  exclude_validation_traces: true
+  validation_mean_tolerance: 5.0
+  validation_p10_tolerance: 10.0
+  validation_stall_tolerance: 1.5
+  validation_switch_tolerance: 3.0
+  selection_mean_weight: 1.0
+  selection_p10_weight: 0.05
+  selection_stall_weight: 0.25
+  selection_switch_weight: 0.05
+  save_candidates: true
+  progress_interval: 10
+
+eval:
+  enabled: true
+  smoke:
+    enabled: false
+    output_name: evaluation_smoke20.json
+    trace_split: test
+    episodes: 20
+    sample_mode: stratified
+    policies: [bola, mpc, random, netllm-sft, netllm-rl]
+    progress_interval: 10
+  final:
+    enabled: true
+    output_name: evaluation_test100.json
+    trace_split: test
+    episodes: 100
+    sample_mode: stratified
+    policies: [bola, mpc, random, netllm-sft, netllm-rl]
+    progress_interval: 10
