@@ -544,6 +544,7 @@ def train_rl_stage(config, paths):
         history_save_path=paths.eval / "rl_validation_history.json",
         progress_interval=int(rl.get("progress_interval", 10)),
         base_model_path=model_path(config),
+        clip_reward=bool(rl.get("clip_reward", True)),
     )
     configured = rl.get("model_path")
     if configured:

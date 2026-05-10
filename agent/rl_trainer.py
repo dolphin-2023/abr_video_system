@@ -214,6 +214,7 @@ def train_rl(
     history_save_path=None,
     progress_interval=10,
     base_model_path=BASE_MODEL_PATH,
+    clip_reward=True,
 ):
     """REINFORCE fine-tuning with evaluation gates and safety regularizers."""
     set_seed(seed)
@@ -222,6 +223,7 @@ def train_rl(
     rtg = load_return_to_go_processor(
         target_return=target_return,
         stats_path=stats_path,
+        clip_reward=clip_reward,
     )
     target_return = rtg.target_return
     rl_save_path = Path(rl_save_path)
@@ -843,6 +845,7 @@ if __name__ == "__main__":
     parser.add_argument("--history-save-path", default=None)
     parser.add_argument("--progress-interval", type=int, default=10)
     parser.add_argument("--base-model-path", default=BASE_MODEL_PATH)
+    parser.add_argument("--no-clip-reward", action="store_true", help="Allow RTG updates outside training reward range.")
     args = parser.parse_args()
     train_rl(
         episodes=args.episodes,
@@ -886,4 +889,5 @@ if __name__ == "__main__":
         history_save_path=args.history_save_path,
         progress_interval=args.progress_interval,
         base_model_path=args.base_model_path,
+        clip_reward=not args.no_clip_reward,
     )

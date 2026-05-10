@@ -15,6 +15,7 @@ from settings import (
     PAST_K,
     SEGMENT_DURATION,
     TOTAL_SEGMENTS,
+    normalize_remaining_chunks,
 )
 from chunk_sizes import load_chunk_sizes_from_env
 
@@ -442,12 +443,9 @@ class ABREnv(gym.Env):
         ]
 
     def _refresh_initial_state(self):
-        # 初始状态也写入下一块大小，避免第一步完全看不到视频侧信息。
         for idx, size_mb in enumerate(self._compute_next_chunk_sizes(segment_index=0)):
             self.state_matrix[4, idx] = size_mb
-        self.state_matrix[5, -1] = (
-            min(self.total_segments, CHUNK_TIL_VIDEO_END_CAP) / CHUNK_TIL_VIDEO_END_CAP
-        )
+        self.state_matrix[5, -1] = normalize_remaining_chunks(self.total_segments)
 
     def _update_state(self, action, chosen_bitrate_kbps):
         self.state_matrix = np.roll(self.state_matrix, -1, axis=1)
@@ -464,6 +462,4 @@ class ABREnv(gym.Env):
             self.state_matrix[4, idx] = size_mb
 
         remaining = max(0, self.total_segments - (self.current_segment + 1))
-        self.state_matrix[5, -1] = (
-            min(remaining, CHUNK_TIL_VIDEO_END_CAP) / CHUNK_TIL_VIDEO_END_CAP
-        )
+        self.state_matrix[5, -1] = normalize_remaining_chunks(remaining)

@@ -22,6 +22,7 @@ from settings import (
     PAST_K,
     RL_MODEL_PATH,
     SFT_MODEL_PATH,
+    normalize_remaining_chunks,
 )
 
 
@@ -125,14 +126,14 @@ class SessionState:
             else:
                 self.state_matrix[4, idx] = 0.0
 
-        self.step_counter += 1
         total_segments = (
             int(self.chunk_sizes_mb.shape[1])
             if self.chunk_sizes_mb is not None
             else 60
         )
         remaining = max(0, total_segments - self.step_counter)
-        self.state_matrix[5, -1] = min(remaining, CHUNK_TIL_VIDEO_END_CAP) / CHUNK_TIL_VIDEO_END_CAP
+        self.state_matrix[5, -1] = normalize_remaining_chunks(remaining)
+        self.step_counter += 1
         self.last_quality_idx = safe_quality_idx
         return self.state_matrix
 

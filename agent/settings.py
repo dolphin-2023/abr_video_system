@@ -32,3 +32,12 @@ BITRATES_KBPS = [300, 600, 900, 2000, 4500, 9000]
 # Fallback used before a dataset-specific value is available. Existing
 # pre-optimization checkpoints were trained with raw returns around this scale.
 DEFAULT_TARGET_RETURN = 800.0
+
+
+def normalize_remaining_chunks(remaining_chunks):
+    """Normalize the remaining chunk count for row 5 of the ABR state matrix.
+
+    Both ABREnv._update_state and SessionState.update use this so that
+    training and inference stay consistent on clamping behavior.
+    """
+    return min(max(0, remaining_chunks), CHUNK_TIL_VIDEO_END_CAP) / CHUNK_TIL_VIDEO_END_CAP
