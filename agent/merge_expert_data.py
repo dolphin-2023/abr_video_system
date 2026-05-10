@@ -97,6 +97,11 @@ def merge_expert_datasets(input_paths, output_path, stats_path=None):
         "[MergeExpertData] action_counts="
         + ", ".join(f"{idx}:{int(count)}" for idx, count in enumerate(action_counts))
     )
+    if len(action_counts) >= 6 and int(action_counts[5]) == 0:
+        print(
+            "[MergeExpertData] warning: action 5 has zero expert samples. "
+            "Increase high-bandwidth/high-MPC collection before a final run."
+        )
     print(f"[MergeExpertData] saved stats -> {stats_path}")
     return stats
 

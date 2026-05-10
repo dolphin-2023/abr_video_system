@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 
@@ -67,7 +68,7 @@ def as_list(value):
 def resolve_path(value, base_dir=None):
     if value in {None, ""}:
         return None
-    path = Path(str(value))
+    path = Path(os.path.expanduser(os.path.expandvars(str(value))))
     if path.is_absolute():
         return path
     if base_dir is not None:

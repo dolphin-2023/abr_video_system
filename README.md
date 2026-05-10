@@ -1,5 +1,45 @@
 # ABR Video System
 
+## 快速定位结果
+
+每次训练的完整实验结果保存在：
+
+```text
+agent/runs/<run_id>/
+```
+
+最常看的文件：
+
+```text
+agent/runs/<run_id>/logs/train.log
+agent/runs/<run_id>/manifest.json
+agent/runs/<run_id>/eval/evaluation_index.json
+agent/runs/<run_id>/eval/*.json
+```
+
+在线 `agent.py` 默认加载的正式模型保存在：
+
+```text
+agent/models/netllm_rl/
+agent/models/netllm_offline_rl/
+agent/models/netllm_sft/
+agent/models/training_stats.json
+agent/models/active_run.json
+```
+
+详细说明见：
+
+```text
+docs/result_management.md
+docs/server_training.md
+```
+
+本地默认外部评估只抽少量 trace；服务器完整训练请使用：
+
+```bash
+python agent/train.py --config agent/configs/train_server.yaml --stage plan --run-id server_plan
+```
+
 基于智能体的自适应码率视频传输实验系统。当前训练链路是：
 
 ```text

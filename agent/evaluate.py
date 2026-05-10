@@ -18,6 +18,7 @@ from settings import (
     PENSIEVE_MODEL_PATH,
     RL_MODEL_PATH,
     SFT_MODEL_PATH,
+    TRAINING_STATS_PATH,
 )
 from trace_utils import sample_trace_files
 from pensieve_torch import PensieveTorchPolicy
@@ -110,6 +111,14 @@ class NetLLMSFTPolicy:
         self.name = policy_name
         self.torch = torch
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        if stats_path is None:
+            if Path(TRAINING_STATS_PATH).exists():
+                stats_path = TRAINING_STATS_PATH
+            else:
+                raise FileNotFoundError(
+                    "NetLLM evaluation requires --stats-path. "
+                    f"Default stats file is missing: {TRAINING_STATS_PATH}"
+                )
         self.rtg = load_return_to_go_processor(stats_path=stats_path)
         self.target_return = self.rtg.target_return
         self.model = NetLLMABR(
@@ -374,6 +383,40 @@ def print_table(results):
         )
 
 
+def write_evaluation_payload(
+    output,
+    trace_split,
+    trace_dir,
+    qoe_profile,
+    sample_mode,
+    seed,
+    trace_files,
+    summaries,
+    details,
+    complete,
+):
+    payload = {
+        "complete": bool(complete),
+        "trace_split": trace_split,
+        "trace_dir": trace_dir,
+        "qoe_profile": qoe_profile,
+        "sample_mode": sample_mode,
+        "seed": seed,
+        "trace_count": len(trace_files),
+        "trace_files": [Path(trace_file).name for trace_file in trace_files],
+        "completed_policies": [item["policy"] for item in summaries],
+        "policies": summaries,
+        "episodes": details,
+    }
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return payload
+
+
 def run_evaluation(
     trace_split="test",
     qoe_profile="pensieve",
@@ -423,6 +466,19 @@ def run_evaluation(
 
     summaries = []
     details = {}
+    output = Path(output)
+    partial_payload = write_evaluation_payload(
+        output=output,
+        trace_split=trace_split,
+        trace_dir=trace_dir,
+        qoe_profile=qoe_profile,
+        sample_mode=sample_mode,
+        seed=seed,
+        trace_files=trace_files,
+        summaries=summaries,
+        details=details,
+        complete=False,
+    )
     for idx, policy_name in enumerate(policies):
         print(
             f"[Evaluate] policy={policy_name} traces={len(trace_files)} "
@@ -450,25 +506,32 @@ def run_evaluation(
         )
         summaries.append(summary)
         details[summary["policy"]] = episodes_detail
-
-    payload = {
-        "trace_split": trace_split,
-        "trace_dir": trace_dir,
-        "qoe_profile": qoe_profile,
-        "sample_mode": sample_mode,
-        "seed": seed,
-        "trace_count": len(trace_files),
-        "policies": summaries,
-        "episodes": details,
-    }
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+        partial_payload = write_evaluation_payload(
+            output=output,
+            trace_split=trace_split,
+            trace_dir=trace_dir,
+            qoe_profile=qoe_profile,
+            sample_mode=sample_mode,
+            seed=seed,
+            trace_files=trace_files,
+            summaries=summaries,
+            details=details,
+            complete=False,
+        )
 
     print_table(summaries)
+    payload = write_evaluation_payload(
+        output=output,
+        trace_split=trace_split,
+        trace_dir=trace_dir,
+        qoe_profile=qoe_profile,
+        sample_mode=sample_mode,
+        seed=seed,
+        trace_files=trace_files,
+        summaries=summaries,
+        details=details,
+        complete=True,
+    )
     print(f"[Evaluate] saved -> {output}")
     return payload
 

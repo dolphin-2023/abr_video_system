@@ -1,11 +1,13 @@
 run:
-  name: train_v3
+  name: train_server
   root: runs
   log_to_file: true
   log_name: train.log
 
 env:
-  llm_path: D:/ai-models/qwen3.5-4b-base
+  # Keep this empty on the server and set ABR_LLM_PATH before launching.
+  # Example: export ABR_LLM_PATH=/data/models/qwen3.5-4b-base
+  llm_path:
   chunk_size_path: models/chunk_sizes.json
   env_verbose: false
 
@@ -23,7 +25,7 @@ common:
   target_return_scale: 1.0
 
 validation:
-  episodes: 30
+  episodes: 40
   split: train
   trace_dir:
   sample_mode: stratified
@@ -31,15 +33,15 @@ validation:
 
 data:
   reuse_existing: false
-  progress_interval: 10
+  progress_interval: 20
   combined_name: expert_combined.npz
   general:
     enabled: true
     save_name: expert_general.npz
-    episodes: 160
+    episodes: 320
     expert_policy: mixed
-    mpc_ratio: 0.5
-    high_bitrate_ratio: 0.05
+    mpc_ratio: 0.45
+    high_bitrate_ratio: 0.10
     high_mpc_safety_factor: 1.25
     high_mpc_min_buffer: 5.0
     high_mpc_max_stall: 0.5
@@ -48,7 +50,7 @@ data:
   high:
     enabled: true
     save_name: expert_high.npz
-    episodes: 120
+    episodes: 240
     expert_policy: high-mpc
     trace_filter: high-bandwidth
     min_mean_throughput_kbps: 2500
@@ -63,12 +65,12 @@ sft:
   stats_name: training_stats.json
   model_path: models/netllm_sft
   stats_path: models/training_stats.json
-  epochs: 12
-  min_epochs: 2
-  early_stop_patience: 3
-  class_weight_power: 0.2
-  max_class_weight: 3.0
-  validation_episodes: 10
+  epochs: 16
+  min_epochs: 4
+  early_stop_patience: 4
+  class_weight_power: 0.25
+  max_class_weight: 3.5
+  validation_episodes: 40
   progress_interval: 100
   validation_progress_interval: 0
 
@@ -77,18 +79,18 @@ offline_rl:
   save_name: offline_rl
   stats_name: training_stats.json
   model_path: models/netllm_offline_rl
-  epochs: 8
-  min_epochs: 2
-  early_stop_patience: 3
+  epochs: 10
+  min_epochs: 4
+  early_stop_patience: 4
   lr: 5.0e-5
   weight_decay: 1.0e-4
-  warmup_steps: 200
+  warmup_steps: 300
   train_scope: non_plm_lora
-  class_weight_power: 0.1
-  max_class_weight: 2.5
-  high_return_weight: 0.35
+  class_weight_power: 0.15
+  max_class_weight: 3.0
+  high_return_weight: 0.45
   target_return_scale: 1.0
-  validation_episodes: 30
+  validation_episodes: 40
   validation_batch_size: 8
   progress_interval: 100
   validation_progress_interval: 0
@@ -97,47 +99,49 @@ rl:
   enabled: true
   save_name: rl
   model_path: models/netllm_rl
-  episodes: 200
-  eval_interval: 20
-  validation_episodes: 30
+  episodes: 600
+  lr: 5.0e-6
+  eval_interval: 40
+  validation_episodes: 40
   validation_batch_size: 8
-  rollout_batch_size: 2
-  min_episodes: 120
-  early_stop_patience: 5
+  rollout_batch_size: 4
+  min_episodes: 240
+  early_stop_patience: 6
   action_jump_limit: 1
-  entropy_coef: 0.01
-  kl_coef: 0.001
+  entropy_coef: 0.003
+  kl_coef: 0.02
+  advantage_clip: 3.0
   train_scope: non_plm_lora
   train_history_action_embedding: true
   exclude_validation_traces: true
-  validation_mean_tolerance: 5.0
-  validation_p10_tolerance: 10.0
-  validation_stall_tolerance: 1.5
-  validation_switch_tolerance: 3.0
+  validation_mean_tolerance: 3.0
+  validation_p10_tolerance: 8.0
+  validation_stall_tolerance: 1.0
+  validation_switch_tolerance: 2.0
   selection_mean_weight: 1.0
-  selection_p10_weight: 0.05
-  selection_stall_weight: 0.25
+  selection_p10_weight: 0.10
+  selection_stall_weight: 0.35
   selection_switch_weight: 0.05
   save_candidates: true
-  progress_interval: 10
+  progress_interval: 20
 
 pensieve:
   enabled: true
   save_name: pensieve
   model_path: models/pensieve_torch
-  pretrain_episodes: 300
+  pretrain_episodes: 500
   pretrain_lr: 1.0e-4
-  episodes: 2000
-  min_episodes: 400
+  episodes: 3000
+  min_episodes: 600
   eval_interval: 100
-  validation_episodes: 30
-  lr: 1.0e-4
+  validation_episodes: 40
+  lr: 5.0e-5
   gamma: 0.99
   value_coef: 0.5
-  entropy_coef: 0.01
+  entropy_coef: 0.005
   grad_clip: 0.5
-  early_stop_patience: 8
-  progress_interval: 20
+  early_stop_patience: 10
+  progress_interval: 25
 
 eval:
   enabled: true
@@ -151,27 +155,27 @@ eval:
     progress_interval: 10
   final:
     enabled: true
-    output_name: evaluation_test100.json
+    output_name: evaluation_test200.json
     trace_split: test
-    episodes: 100
+    episodes: 200
     sample_mode: stratified
     policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
-    progress_interval: 10
+    progress_interval: 20
   external_puffer_recent:
     enabled: true
     output_name: evaluation_external_puffer_recent.json
     trace_split: external_puffer_recent
     trace_dir:
-    episodes: 20
+    episodes: 300
     sample_mode: stratified
     policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
-    progress_interval: 5
+    progress_interval: 25
   external_weak_mobile:
     enabled: true
     output_name: evaluation_external_weak_mobile.json
     trace_split: external_weak_mobile
     trace_dir:
-    episodes: 20
+    episodes: 252
     sample_mode: stratified
     policies: [bola, mpc, random, pensieve, netllm-sft, netllm-offline-rl, netllm-rl]
-    progress_interval: 5
+    progress_interval: 25

@@ -189,6 +189,8 @@ def collect_expert_trajectories(
     mpc_safety_factor=0.9,
     high_mpc_safety_factor=1.1,
     high_mpc_min_buffer=8.0,
+    high_mpc_max_stall=0.25,
+    high_mpc_jump_limit=1,
     trace_filter="all",
     min_mean_throughput_kbps=5000.0,
     high_bandwidth_percentile=70.0,
@@ -258,8 +260,9 @@ def collect_expert_trajectories(
                     state,
                     env,
                     safety_factor=high_mpc_safety_factor,
-                    jump_limit=1,
+                    jump_limit=high_mpc_jump_limit,
                     min_buffer_seconds=high_mpc_min_buffer,
+                    max_stall_seconds=high_mpc_max_stall,
                 )
             elif episode_policy == "mpc":
                 action = mpc_expert_policy(
@@ -316,6 +319,8 @@ def collect_expert_trajectories(
         "mpc_safety_factor": float(mpc_safety_factor),
         "high_mpc_safety_factor": float(high_mpc_safety_factor),
         "high_mpc_min_buffer": float(high_mpc_min_buffer),
+        "high_mpc_max_stall": float(high_mpc_max_stall),
+        "high_mpc_jump_limit": int(high_mpc_jump_limit),
         "trace_filter": str(trace_filter),
         "filtered_trace_count": int(filtered_trace_count),
         "min_mean_throughput_kbps": float(min_mean_throughput_kbps),
@@ -404,6 +409,8 @@ if __name__ == "__main__":
     parser.add_argument("--mpc-safety-factor", type=float, default=0.9)
     parser.add_argument("--high-mpc-safety-factor", type=float, default=1.1)
     parser.add_argument("--high-mpc-min-buffer", type=float, default=8.0)
+    parser.add_argument("--high-mpc-max-stall", type=float, default=0.25)
+    parser.add_argument("--high-mpc-jump-limit", type=int, default=1)
     parser.add_argument("--trace-filter", default="all", choices=["all", "high-bandwidth"])
     parser.add_argument("--min-mean-throughput-kbps", type=float, default=5000.0)
     parser.add_argument("--high-bandwidth-percentile", type=float, default=70.0)
@@ -428,6 +435,8 @@ if __name__ == "__main__":
         mpc_safety_factor=args.mpc_safety_factor,
         high_mpc_safety_factor=args.high_mpc_safety_factor,
         high_mpc_min_buffer=args.high_mpc_min_buffer,
+        high_mpc_max_stall=args.high_mpc_max_stall,
+        high_mpc_jump_limit=args.high_mpc_jump_limit,
         trace_filter=args.trace_filter,
         min_mean_throughput_kbps=args.min_mean_throughput_kbps,
         high_bandwidth_percentile=args.high_bandwidth_percentile,

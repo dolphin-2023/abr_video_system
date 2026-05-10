@@ -4,11 +4,12 @@ import os
 import shutil
 import sys
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 from pathlib import Path
 
 from config_utils import dump_config, get_nested, load_config, resolve_path, section
 from run_manager import create_run_paths, make_run_id
-from settings import AGENT_DIR, BASE_MODEL_PATH
+from settings import AGENT_DIR, BASE_MODEL_PATH, MODEL_DIR, TRAINING_STATS_PATH
 
 
 DEFAULT_CONFIG = AGENT_DIR / "configs" / "train_v3.yaml"
@@ -62,6 +63,41 @@ def write_json(path, payload):
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def read_json(path):
+    path = Path(path)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def now_iso():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def run_result_paths(paths):
+    return {
+        "run_dir": str(paths.root),
+        "data_dir": str(paths.data),
+        "checkpoints_dir": str(paths.checkpoints),
+        "eval_dir": str(paths.eval),
+        "log_file": str(paths.logs / "train.log"),
+        "config": str(paths.config),
+        "manifest": str(paths.manifest),
+    }
+
+
+def write_manifest(paths, updates):
+    manifest = read_json(paths.manifest)
+    manifest.update(updates)
+    manifest["updated_at"] = now_iso()
+    manifest["result_paths"] = run_result_paths(paths)
+    write_json(paths.manifest, manifest)
+    return manifest
+
+
 def write_trace_list(path, trace_files):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,6 +115,34 @@ def sync_checkpoint_dir(source, target):
     target.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target, dirs_exist_ok=True)
     return target
+
+
+def sync_file(source, target):
+    source = Path(source)
+    target = Path(target)
+    if not source.exists() or not source.is_file():
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    return target
+
+
+def write_active_run(paths, config, stage):
+    payload = {
+        "updated_at": now_iso(),
+        "stage": stage,
+        "run_dir": str(paths.root),
+        "stats_path": str(sft_stats_path(config, paths)),
+        "models_dir": str(MODEL_DIR),
+        "sft_model_path": str(agent_path(section(config, "sft").get("model_path", "models/netllm_sft"))),
+        "offline_rl_model_path": str(agent_path(section(config, "offline_rl").get("model_path", "models/netllm_offline_rl"))),
+        "rl_model_path": str(agent_path(section(config, "rl").get("model_path", "models/netllm_rl"))),
+        "pensieve_model_path": str(agent_path(section(config, "pensieve").get("model_path", "models/pensieve_torch"))),
+        "eval_dir": str(paths.eval),
+        "manifest": str(paths.manifest),
+    }
+    write_json(MODEL_DIR / "active_run.json", payload)
+    return payload
 
 
 def agent_path(value):
@@ -199,6 +263,8 @@ def collect_data(config, paths, validation_traces):
             mpc_safety_factor=float(item.get("mpc_safety_factor", data_cfg.get("mpc_safety_factor", 0.9))),
             high_mpc_safety_factor=float(item.get("high_mpc_safety_factor", data_cfg.get("high_mpc_safety_factor", 1.1))),
             high_mpc_min_buffer=float(item.get("high_mpc_min_buffer", data_cfg.get("high_mpc_min_buffer", 8.0))),
+            high_mpc_max_stall=float(item.get("high_mpc_max_stall", data_cfg.get("high_mpc_max_stall", 0.25))),
+            high_mpc_jump_limit=int(item.get("high_mpc_jump_limit", data_cfg.get("high_mpc_jump_limit", 1))),
             trace_filter=item.get("trace_filter", data_cfg.get("trace_filter", "all")),
             min_mean_throughput_kbps=float(
                 item.get("min_mean_throughput_kbps", data_cfg.get("min_mean_throughput_kbps", 5000.0))
@@ -491,13 +557,15 @@ def evaluate_stage(config, paths):
     from evaluate import run_evaluation
 
     eval_cfg = section(config, "eval")
+    outputs = []
     for name, item in eval_cfg.items():
         if not isinstance(item, dict):
             continue
         item = section(eval_cfg, name)
         if not item.get("enabled", False):
             continue
-        run_evaluation(
+        output_path = paths.eval / item.get("output_name", f"evaluation_{name}.json")
+        payload = run_evaluation(
             trace_split=item.get("trace_split", "test"),
             trace_dir=item.get("trace_dir", None),
             qoe_profile=item.get("qoe_profile", common(config, "qoe_profile", "pensieve")),
@@ -509,7 +577,7 @@ def evaluate_stage(config, paths):
             progress_interval=int(item.get("progress_interval", 10)),
             video_id=get_nested(config, ("env", "video_id"), None),
             chunk_size_path=agent_path(get_nested(config, ("env", "chunk_size_path"), None)),
-            output=paths.eval / item.get("output_name", f"evaluation_{name}.json"),
+            output=output_path,
             sft_model_path=sft_checkpoint_path(config, paths),
             offline_rl_model_path=offline_rl_checkpoint_path(config, paths),
             rl_model_path=rl_checkpoint_path(config, paths),
@@ -518,6 +586,17 @@ def evaluate_stage(config, paths):
             base_model_path=model_path(config),
             env_verbose=bool(get_nested(config, ("env", "env_verbose"), False)),
         )
+        outputs.append({
+            "name": name,
+            "output": str(output_path),
+            "trace_split": payload.get("trace_split"),
+            "trace_count": payload.get("trace_count"),
+            "policies": [item.get("policy") for item in payload.get("policies", [])],
+            "complete": payload.get("complete", True),
+        })
+    if outputs:
+        write_json(paths.eval / "evaluation_index.json", {"updated_at": now_iso(), "outputs": outputs})
+    return outputs
 
 
 def run_pipeline(args):
@@ -545,14 +624,14 @@ def run_pipeline(args):
 
         if args.stage == "plan":
             print("[Train] plan only; no training started.")
-            write_json(paths.manifest, manifest)
+            write_manifest(paths, manifest)
             return
 
         data_path = find_data_path(config, paths)
         if stage_in(args.stage, "collect"):
             data_path = collect_data(config, paths, validation_traces)
             manifest["data_path"] = str(data_path)
-            write_json(paths.manifest, manifest)
+            write_manifest(paths, manifest)
 
         if stage_in(args.stage, "sft"):
             if not Path(data_path).exists():
@@ -560,7 +639,11 @@ def run_pipeline(args):
             print(f"[Train] SFT data={data_path}")
             train_sft_stage(config, paths, data_path)
             manifest["sft_model_path"] = str(sft_checkpoint_path(config, paths))
-            write_json(paths.manifest, manifest)
+            synced_stats = sync_file(sft_stats_path(config, paths), TRAINING_STATS_PATH)
+            if synced_stats is not None:
+                print(f"[Train] synced training stats -> {synced_stats}")
+            write_active_run(paths, config, "sft")
+            write_manifest(paths, manifest)
 
         if stage_in(args.stage, "offline_rl") and bool(section(config, "offline_rl").get("enabled", False)):
             if not Path(data_path).exists():
@@ -570,7 +653,11 @@ def run_pipeline(args):
             manifest["offline_rl_model_path"] = str(offline_rl_checkpoint_path(config, paths))
             manifest["sft_model_path"] = str(sft_checkpoint_path(config, paths))
             manifest["stats_path"] = str(sft_stats_path(config, paths))
-            write_json(paths.manifest, manifest)
+            synced_stats = sync_file(sft_stats_path(config, paths), TRAINING_STATS_PATH)
+            if synced_stats is not None:
+                print(f"[Train] synced training stats -> {synced_stats}")
+            write_active_run(paths, config, "offline_rl")
+            write_manifest(paths, manifest)
 
         if stage_in(args.stage, "rl") and bool(section(config, "rl").get("enabled", False)):
             print("[Train] RL start")
@@ -579,18 +666,21 @@ def run_pipeline(args):
             manifest["offline_rl_model_path"] = str(offline_rl_checkpoint_path(config, paths))
             manifest["sft_model_path"] = str(sft_checkpoint_path(config, paths))
             manifest["stats_path"] = str(sft_stats_path(config, paths))
-            write_json(paths.manifest, manifest)
+            write_active_run(paths, config, "rl")
+            write_manifest(paths, manifest)
 
         if stage_in(args.stage, "pensieve") and bool(section(config, "pensieve").get("enabled", False)):
             print("[Train] Pensieve baseline start")
             train_pensieve_stage(config, paths)
             manifest["pensieve_model_path"] = str(pensieve_checkpoint_path(config, paths))
-            write_json(paths.manifest, manifest)
+            write_active_run(paths, config, "pensieve")
+            write_manifest(paths, manifest)
 
         if stage_in(args.stage, "eval", "evaluate") and bool(section(config, "eval").get("enabled", True)):
             print("[Train] evaluation start")
-            evaluate_stage(config, paths)
-            write_json(paths.manifest, manifest)
+            manifest["evaluation_outputs"] = evaluate_stage(config, paths)
+            write_active_run(paths, config, "eval")
+            write_manifest(paths, manifest)
 
         print(f"[Train] done: {paths.root}")
 
