@@ -33,6 +33,7 @@ validation:
 
 data:
   reuse_existing: false
+  workers: 4
   progress_interval: 20
   combined_name: expert_combined.npz
   general:
@@ -68,6 +69,9 @@ sft:
   epochs: 16
   min_epochs: 4
   early_stop_patience: 4
+  batch_size: 8
+  num_workers: 4
+  validation_batch_size: 16
   class_weight_power: 0.25
   max_class_weight: 3.5
   validation_episodes: 40
