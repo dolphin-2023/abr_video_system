@@ -1,5 +1,5 @@
 {
-  "data_path": "expert_combined_v2.npz",
+  "data_path": "D:\\Desktop\\\u6bd5\u8bbe\\abr_video_system\\agent\\runs\\final_full_20260509\\data\\expert_combined.npz",
   "expert_policy": "merged",
   "trace_split": null,
   "trace_dir": null,
@@ -10,16 +10,16 @@
   "sample_step": 5,
   "gamma": 1.0,
   "return_scale": 1000.0,
-  "min_reward": -160.79412841796875,
+  "min_reward": -75.0468521118164,
   "max_reward": 4.5,
-  "min_return": 0.0008473861962556839,
-  "mean_return": 0.022456403821706772,
-  "max_return": 0.046697210520505905,
-  "mean_episode_return": 0.04598778044296937,
-  "max_episode_return": 0.046697210520505905,
-  "raw_min_return": -604.7598876953125,
-  "raw_mean_return": 26.423622131347656,
-  "raw_max_return": 163.22718811035156,
+  "min_return": 0.0006761535769328475,
+  "mean_return": 0.02206992171704769,
+  "max_return": 0.04675276204943657,
+  "mean_episode_return": 0.04505419648167762,
+  "max_episode_return": 0.04675276204943657,
+  "raw_min_return": -272.06683349609375,
+  "raw_mean_return": 36.04869079589844,
+  "raw_max_return": 192.8000030517578,
   "target_return_scale": 1.0,
-  "target_return": 0.046697210520505905
+  "target_return": 0.04675276204943657
 }

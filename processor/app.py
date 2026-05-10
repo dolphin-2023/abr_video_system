@@ -121,6 +121,8 @@ def get_video_height(filepath: Path) -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
         return int(result.stdout.strip())
@@ -146,6 +148,8 @@ def get_video_duration(filepath: Path) -> float:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
         return max(0.0, float(result.stdout.strip()))
@@ -249,6 +253,8 @@ def process_video_to_dash(input_filepath: str, video_id: str, job_id: str | None
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         last_log = ""
