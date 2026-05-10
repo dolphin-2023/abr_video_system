@@ -7,9 +7,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import DataLoader
 
-from experience_dataset import ABRExperienceDataset
+from experience_dataset import ABRExperienceDataset, collate_abr_samples
 from checkpoint_utils import save_netllm_checkpoint
 from network import NetLLMABR
 from settings import ACTION_DIM, BASE_MODEL_PATH, MODEL_DIR, SFT_MODEL_PATH, TRAINING_STATS_PATH
@@ -65,6 +67,7 @@ def train_sft(
     data_path="expert_data.npz",
     model_save_path=SFT_MODEL_PATH,
     epochs=20,
+    batch_size=8,
     accumulation_steps=8,
     lr=1e-4,
     weight_decay=1e-4,
@@ -80,7 +83,10 @@ def train_sft(
     target_return_scale=1.0,
     class_weight_power=0.25,
     max_class_weight=3.0,
+    num_workers=0,
+    pin_memory=None,
     validation_episodes=10,
+    validation_batch_size=8,
     validation_split="train",
     validation_trace_dir=None,
     validation_sample_mode="stratified",
@@ -138,6 +144,7 @@ def train_sft(
     if validation_trace_files:
         print(
             f"[SFT] validation=on traces={len(validation_trace_files)} "
+            f"batch_size={int(validation_batch_size)} "
             f"split={validation_split} qoe={validation_qoe_profile}"
         )
     else:
@@ -177,7 +184,27 @@ def train_sft(
             + ", ".join(f"{idx}:{weight:.3f}" for idx, weight in enumerate(class_weights))
         )
         class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
+
+    pin_memory = bool(pin_memory) if pin_memory is not None else (device.type == "cuda")
+    persistent = bool(num_workers) and num_workers > 0
+
+    loader = DataLoader(
+        dataset,
+        batch_size=int(batch_size),
+        shuffle=True,
+        num_workers=int(num_workers),
+        pin_memory=pin_memory,
+        persistent_workers=persistent,
+        collate_fn=collate_abr_samples,
+    )
+
+    print(
+        f"[SFT] batch_size={int(batch_size)} "
+        f"accumulation_steps={int(accumulation_steps)} "
+        f"num_workers={int(num_workers)} "
+        f"pin_memory={pin_memory}"
+    )
 
     global_step = 0
     consecutive_good_epochs = 0
@@ -185,8 +212,7 @@ def train_sft(
     epochs_without_validation_improvement = 0
     validation_history = []
     for epoch in range(epochs):
-        indices = np.random.permutation(len(dataset))
-        total_batches = len(indices)
+        total_batches = len(loader)
         epoch_start = time.time()
         optimizer.zero_grad(set_to_none=True)
 
@@ -194,30 +220,23 @@ def train_sft(
         correct_preds = 0
         total_preds = 0
 
-        for batch_idx, sample_idx in enumerate(indices):
-            sample = dataset[sample_idx]
-            states = torch.tensor(sample["states"], dtype=torch.float32, device=device).unsqueeze(0)
-            actions = (
-                torch.tensor(sample["actions"], dtype=torch.long, device=device)
-                .unsqueeze(0)
-                .unsqueeze(-1)
-            )
-            returns = (
-                torch.tensor(sample["returns"], dtype=torch.float32, device=device)
-                .unsqueeze(0)
-                .unsqueeze(-1)
-            )
-            timesteps = torch.tensor(sample["timesteps"], dtype=torch.long, device=device).unsqueeze(0)
+        for batch_idx, (states_np, actions_np, returns_np, timesteps_np, mask_np) in enumerate(loader):
+            states = torch.as_tensor(states_np, dtype=torch.float32, device=device)
+            actions = torch.as_tensor(actions_np, dtype=torch.long, device=device).unsqueeze(-1)
+            returns_t = torch.as_tensor(returns_np, dtype=torch.float32, device=device).unsqueeze(-1)
+            timesteps = torch.as_tensor(timesteps_np, dtype=torch.long, device=device)
+            mask = torch.as_tensor(mask_np, dtype=torch.float32, device=device)
 
             with autocast_context(device):
-                logits = model(states, actions, returns, timesteps)[0]
-                targets = actions[0, :, 0]
-                loss = criterion(logits, targets)
-                scaled_loss = loss / accumulation_steps
+                logits = model(states, actions, returns_t, timesteps, attention_mask=mask)
+                targets = actions[:, :, 0].clone()
+                targets[mask == 0] = -100
+                loss = criterion(logits.reshape(-1, ACTION_DIM), targets.reshape(-1))
+                scaled_loss = loss / int(accumulation_steps)
 
             scaled_loss.backward()
 
-            if ((batch_idx + 1) % accumulation_steps == 0) or (batch_idx + 1 == len(indices)):
+            if ((batch_idx + 1) % int(accumulation_steps) == 0) or (batch_idx + 1 == len(loader)):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -226,8 +245,9 @@ def train_sft(
 
             epoch_loss += float(loss.detach().cpu())
             preds = torch.argmax(logits.detach(), dim=-1)
-            correct_preds += int((preds == targets).sum().item())
-            total_preds += int(targets.numel())
+            valid = mask.bool()
+            correct_preds += int((preds == actions[:, :, 0])[valid].sum().item())
+            total_preds += int(valid.sum().item())
 
             if progress_interval and (batch_idx + 1) % int(progress_interval) == 0:
                 completed = batch_idx + 1
@@ -245,7 +265,7 @@ def train_sft(
                     f"eta={format_duration(eta)}"
                 )
 
-        avg_loss = epoch_loss / max(len(indices), 1)
+        avg_loss = epoch_loss / max(len(loader), 1)
         accuracy = correct_preds / max(total_preds, 1)
         print(
             f"[SFT] epoch={epoch + 1}/{epochs} "
@@ -267,6 +287,7 @@ def train_sft(
                 progress_interval=validation_progress_interval,
                 label="sft-validation",
                 stats_path=stats_save_path,
+                batch_size=int(validation_batch_size),
             )
             validation_history.append({
                 "epoch": epoch + 1,

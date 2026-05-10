@@ -1,5 +1,6 @@
 import argparse
 import json
+import multiprocessing
 import os
 import random
 from pathlib import Path
@@ -22,6 +23,88 @@ from settings import (
 )
 from trace_utils import sample_trace_files
 from pensieve_torch import PensieveTorchPolicy
+
+
+_LIGHTWEIGHT_POLICIES = {"bola", "mpc", "random"}
+
+
+def _worker_eval_policy(policy_name, trace_files, trace_split, trace_dir, qoe_profile, seed):
+    """Evaluate a lightweight policy on a subset of traces in a worker process.
+
+    Returns (episodes, totals) so the main process can merge results and
+    compute the final summary without pickling large model objects.
+    """
+    policy = make_policy(policy_name, seed=seed)
+
+    total_chunks = 0
+    total_bitrate = 0.0
+    total_stall = 0.0
+    total_smooth = 0.0
+    total_duration = 0.0
+    rebuffer_chunks = 0
+    episodes = []
+
+    for trace_file in trace_files:
+        env = ABREnv(
+            trace_split=trace_split,
+            trace_dir=trace_dir,
+            trace_file=trace_file,
+            random_start=False,
+            qoe_profile=qoe_profile,
+        )
+        state, _ = env.reset()
+        policy.reset(env)
+
+        done = False
+        prev_action = None
+        ep_qoe = 0.0
+        ep_bitrate = 0.0
+        ep_stall = 0.0
+        ep_smooth = 0.0
+        ep_switches = 0
+        ep_steps = 0
+
+        while not done:
+            action = int(policy.act(state, env))
+            next_state, reward, done, _, info = env.step(action)
+
+            ep_qoe += float(reward)
+            ep_bitrate += float(info["bitrate_kbps"])
+            ep_stall += float(info["stall_time"])
+            ep_smooth += float(info["smoothness_penalty"])
+            ep_steps += 1
+
+            if info["stall_time"] > 1e-6:
+                rebuffer_chunks += 1
+            if prev_action is not None and action != prev_action:
+                ep_switches += 1
+            prev_action = action
+            state = next_state
+
+        total_chunks += ep_steps
+        total_bitrate += ep_bitrate
+        total_stall += ep_stall
+        total_smooth += ep_smooth
+        total_duration += ep_steps * env.segment_duration
+        episodes.append({
+            "trace": Path(trace_file).name,
+            "qoe": ep_qoe,
+            "mean_bitrate": ep_bitrate / max(ep_steps, 1),
+            "stall_time": ep_stall,
+            "smoothness_penalty": ep_smooth,
+            "quality_switch_count": ep_switches,
+            "chunks": ep_steps,
+        })
+
+    totals = {
+        "total_chunks": total_chunks,
+        "total_bitrate": total_bitrate,
+        "total_stall": total_stall,
+        "total_smooth": total_smooth,
+        "total_duration": total_duration,
+        "rebuffer_chunks": rebuffer_chunks,
+    }
+    return episodes, totals
 
 
 def harmonic_throughput_kbps(state_matrix):
@@ -437,6 +520,7 @@ def run_evaluation(
     stats_path=None,
     base_model_path=BASE_MODEL_PATH,
     env_verbose=False,
+    workers=1,
 ):
     if video_id:
         os.environ["ABR_VIDEO_ID"] = str(video_id)
@@ -479,33 +563,98 @@ def run_evaluation(
         details=details,
         complete=False,
     )
+    eff_workers = max(1, min(int(workers), len(trace_files)))
     for idx, policy_name in enumerate(policies):
-        print(
-            f"[Evaluate] policy={policy_name} traces={len(trace_files)} "
-            f"split={trace_split} qoe={qoe_profile} sample={sample_mode}"
-        )
-        policy = make_policy(
-            policy_name,
-            seed=seed + idx,
-            device=device,
-            sft_model_path=sft_model_path,
-            offline_rl_model_path=offline_rl_model_path,
-            rl_model_path=rl_model_path,
-            pensieve_model_path=pensieve_model_path,
-            stats_path=stats_path,
-            base_model_path=base_model_path,
-        )
-        summary, episodes_detail = evaluate_policy(
-            policy,
-            trace_files,
-            trace_split,
-            qoe_profile,
-            progress_interval=progress_interval,
-            trace_dir=trace_dir,
-            env_verbose=env_verbose,
-        )
-        summaries.append(summary)
-        details[summary["policy"]] = episodes_detail
+        normalised = policy_name.lower()
+        use_parallel = eff_workers > 1 and normalised in _LIGHTWEIGHT_POLICIES
+        if use_parallel:
+            print(
+                f"[Evaluate] policy={policy_name} traces={len(trace_files)} "
+                f"split={trace_split} qoe={qoe_profile} sample={sample_mode} "
+                f"workers={eff_workers}"
+            )
+            chunks = np.array_split(np.asarray(trace_files, dtype=object), eff_workers)
+            chunks = [list(c) for c in chunks if len(c) > 0]
+            ctx = multiprocessing.get_context("spawn")
+            with ctx.Pool(processes=len(chunks)) as pool:
+                args_list = [
+                    (normalised, chunk, trace_split, trace_dir, qoe_profile, seed + idx + i)
+                    for i, chunk in enumerate(chunks)
+                ]
+                results = pool.starmap(_worker_eval_policy, args_list)
+
+            all_episodes = []
+            merged_totals = {
+                "total_chunks": 0, "total_bitrate": 0.0, "total_stall": 0.0,
+                "total_smooth": 0.0, "total_duration": 0.0, "rebuffer_chunks": 0,
+            }
+            for ep_list, totals in results:
+                all_episodes.extend(ep_list)
+                for key in merged_totals:
+                    merged_totals[key] += totals[key]
+
+            qoes = np.asarray([e["qoe"] for e in all_episodes], dtype=np.float32)
+            stall_times = np.asarray([e["stall_time"] for e in all_episodes], dtype=np.float32)
+            smoothness_penalties = np.asarray(
+                [e["smoothness_penalty"] for e in all_episodes], dtype=np.float32,
+            )
+            switch_counts = np.asarray(
+                [e["quality_switch_count"] for e in all_episodes], dtype=np.float32,
+            )
+            summary = {
+                "policy": normalised,
+                "qoe_profile": qoe_profile,
+                "episodes": len(all_episodes),
+                "chunks": merged_totals["total_chunks"],
+                "mean_qoe": float(np.mean(qoes)) if qoes.size else 0.0,
+                "median_qoe": float(np.median(qoes)) if qoes.size else 0.0,
+                "p10_qoe": float(np.percentile(qoes, 10)) if qoes.size else 0.0,
+                "worst_qoe": float(np.min(qoes)) if qoes.size else 0.0,
+                "best_qoe": float(np.max(qoes)) if qoes.size else 0.0,
+                "mean_bitrate": merged_totals["total_bitrate"] / max(merged_totals["total_chunks"], 1),
+                "mean_stall_time": float(np.mean(stall_times)) if stall_times.size else 0.0,
+                "mean_smoothness_penalty": (
+                    float(np.mean(smoothness_penalties)) if smoothness_penalties.size else 0.0
+                ),
+                "rebuffer_ratio": merged_totals["total_stall"] / max(merged_totals["total_duration"], 1e-8),
+                "stall_chunk_ratio": merged_totals["rebuffer_chunks"] / max(merged_totals["total_chunks"], 1),
+                "quality_switch_count": float(np.mean(switch_counts)) if switch_counts.size else 0.0,
+            }
+            summaries.append(summary)
+            details[summary["policy"]] = all_episodes
+        else:
+            if eff_workers > 1:
+                print(
+                    f"[Evaluate] policy={policy_name} traces={len(trace_files)} "
+                    f"split={trace_split} qoe={qoe_profile} sample={sample_mode} serial (heavy model)"
+                )
+            else:
+                print(
+                    f"[Evaluate] policy={policy_name} traces={len(trace_files)} "
+                    f"split={trace_split} qoe={qoe_profile} sample={sample_mode}"
+                )
+            policy = make_policy(
+                policy_name,
+                seed=seed + idx,
+                device=device,
+                sft_model_path=sft_model_path,
+                offline_rl_model_path=offline_rl_model_path,
+                rl_model_path=rl_model_path,
+                pensieve_model_path=pensieve_model_path,
+                stats_path=stats_path,
+                base_model_path=base_model_path,
+            )
+            summary, episodes_detail = evaluate_policy(
+                policy,
+                trace_files,
+                trace_split,
+                qoe_profile,
+                progress_interval=progress_interval,
+                trace_dir=trace_dir,
+                env_verbose=env_verbose,
+            )
+            summaries.append(summary)
+            details[summary["policy"]] = episodes_detail
         partial_payload = write_evaluation_payload(
             output=output,
             trace_split=trace_split,
@@ -577,6 +726,8 @@ def parse_args():
     parser.add_argument("--base-model-path", default=BASE_MODEL_PATH)
     parser.add_argument("--env-verbose", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("models") / "evaluation_summary.json")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Parallel workers for bola/mpc/random (heavy models stay serial).")
     return parser.parse_args()
 
 
@@ -602,6 +753,7 @@ def main():
         stats_path=args.stats_path,
         base_model_path=args.base_model_path,
         env_verbose=args.env_verbose,
+        workers=args.workers,
     )
 
 

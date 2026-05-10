@@ -181,30 +181,31 @@ class NetLLMABR(nn.Module):
             self.embed_state6(f6) + time_emb,
         ]
 
-        stacked_inputs = []
-        action_positions = np.zeros(seq_len, dtype=np.int64)
-        for idx in range(seq_len):
-            step_tokens = torch.cat(
-                (
-                    return_emb[0, idx:idx + 1],
-                    state_embs[0][0, idx:idx + 1],
-                    state_embs[1][0, idx:idx + 1],
-                    state_embs[2][0, idx:idx + 1],
-                    state_embs[3][0, idx:idx + 1],
-                    state_embs[4][0, idx:idx + 1],
-                    state_embs[5][0, idx:idx + 1],
-                    action_emb[0, idx:idx + 1],
-                ),
-                dim=0,
-            )
-            stacked_inputs.append(step_tokens)
-            action_positions[idx] = (idx + 1) * 8 - 2
-
-        stacked_inputs = torch.cat(stacked_inputs, dim=0).unsqueeze(0)
-        stacked_inputs = stacked_inputs[:, -self.plm_embed_size:, :]
+        all_tokens = torch.stack(
+            [
+                return_emb,
+                state_embs[0],
+                state_embs[1],
+                state_embs[2],
+                state_embs[3],
+                state_embs[4],
+                state_embs[5],
+                action_emb,
+            ],
+            dim=2,
+        )
+        stacked_inputs = all_tokens.reshape(batch_size, seq_len * 8, self.plm_embed_size)
+        stacked_inputs = stacked_inputs[:, -self.plm_embed_size :, :]
         stacked_inputs = self.embed_ln(stacked_inputs)
 
-        if attention_mask is None:
+        if attention_mask is not None and attention_mask.dim() == 2:
+            attention_mask = (
+                attention_mask.unsqueeze(-1)
+                .expand(-1, -1, 8)
+                .reshape(batch_size, -1)
+            )
+            attention_mask = attention_mask[:, -stacked_inputs.shape[1] :]
+        elif attention_mask is None:
             attention_mask = torch.ones(
                 stacked_inputs.shape[0],
                 stacked_inputs.shape[1],
@@ -218,6 +219,10 @@ class NetLLMABR(nn.Module):
             output_hidden_states=False,
         )
         hidden = transformer_outputs.last_hidden_state
+        action_positions = torch.arange(6, seq_len * 8, 8, device=device)
+        if stacked_inputs.shape[1] < seq_len * 8:
+            offset = seq_len * 8 - stacked_inputs.shape[1]
+            action_positions = action_positions[action_positions >= offset] - offset
         action_hidden = hidden[:, action_positions, :].to(torch.float32)
         return self.action_head(action_hidden)
 

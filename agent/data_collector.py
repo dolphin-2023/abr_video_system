@@ -1,8 +1,11 @@
 import argparse
 import json
 import math
+import multiprocessing
 import os
 import random
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -174,6 +177,264 @@ def apply_trace_filter(
     return before_count - len(env.trace_files)
 
 
+def _worker_collect_episodes(worker_id, num_episodes, temp_dir, config):
+    """Collect a subset of episodes inside a single worker process.
+
+    Saves trajectories to a temporary npz under *temp_dir* so that the
+    parent process can merge them without pickling large lists across
+    process boundaries.
+
+    Parameters in *config* are the same keyword arguments accepted by
+    :func:`collect_expert_trajectories`.
+    """
+    seed = config["expert_seed"] + worker_id
+    rng = random.Random(seed)
+    gamma = config.get("gamma", 1.0)
+    expert_policy = config["expert_policy"]
+    exclude_trace_files = config.get("exclude_trace_files") or []
+
+    env = ABREnv(
+        trace_split=config.get("trace_split"),
+        trace_dir=config.get("trace_dir"),
+        qoe_profile=config.get("qoe_profile"),
+    )
+
+    excluded_trace_names = {Path(t).name for t in exclude_trace_files}
+    if excluded_trace_names:
+        env.trace_files = [
+            tf for tf in env.trace_files
+            if Path(tf).name not in excluded_trace_names
+        ]
+        env.trace_files_by_source = env._group_trace_files(env.trace_files)
+
+    apply_trace_filter(
+        env,
+        trace_filter=config.get("trace_filter", "all"),
+        min_mean_throughput_kbps=config.get("min_mean_throughput_kbps", 5000.0),
+        high_bandwidth_percentile=config.get("high_bandwidth_percentile", 70.0),
+    )
+
+    bitrates = env.bitrates_kbps
+    trajectories = []
+    expert_episode_counts = {"bola": 0, "mpc": 0, "high_mpc": 0}
+
+    for _ in range(num_episodes):
+        episode_policy = expert_policy
+        if expert_policy == "mixed":
+            draw = rng.random()
+            if draw < float(config.get("high_bitrate_ratio", 0.0)):
+                episode_policy = "high_mpc"
+            elif draw < float(config.get("high_bitrate_ratio", 0.0)) + float(config.get("mpc_ratio", 0.35)):
+                episode_policy = "mpc"
+            else:
+                episode_policy = "bola"
+
+        expert_episode_counts[episode_policy] += 1
+
+        state, _ = env.reset()
+        done = False
+        ep_states, ep_actions, ep_rewards = [], [], []
+        trace_name = getattr(env, "current_trace_name", "unknown")
+
+        while not done:
+            if episode_policy == "high_mpc":
+                action = high_bitrate_expert_policy(
+                    state, env,
+                    safety_factor=config.get("high_mpc_safety_factor", 1.1),
+                    jump_limit=config.get("high_mpc_jump_limit", 1),
+                    min_buffer_seconds=config.get("high_mpc_min_buffer", 8.0),
+                    max_stall_seconds=config.get("high_mpc_max_stall", 0.25),
+                )
+            elif episode_policy == "mpc":
+                action = mpc_expert_policy(
+                    state, env,
+                    safety_factor=config.get("mpc_safety_factor", 0.9),
+                    jump_limit=1,
+                )
+            else:
+                action = bola_expert_policy(state, bitrates)
+
+            ep_states.append(state.copy())
+            ep_actions.append(action)
+            state, reward, done, _, _ = env.step(action)
+            ep_rewards.append(reward)
+
+        if len(ep_actions) < 2:
+            continue
+
+        returns = np.zeros(len(ep_rewards), dtype=np.float32)
+        running = 0.0
+        for idx in range(len(ep_rewards) - 1, -1, -1):
+            running = float(ep_rewards[idx]) + gamma * running
+            returns[idx] = running
+
+        trajectories.append({
+            "states": np.asarray(ep_states, dtype=np.float32),
+            "actions": np.asarray(ep_actions, dtype=np.int64),
+            "rewards": np.asarray(ep_rewards, dtype=np.float32),
+            "returns": returns,
+            "timesteps": np.arange(len(ep_actions), dtype=np.int64),
+            "trace_name": trace_name,
+            "expert_policy": episode_policy,
+        })
+
+    temp_path = Path(temp_dir) / f"temp_worker_{worker_id:04d}.npz"
+    np.savez_compressed(
+        temp_path,
+        trajectories=np.asarray(trajectories, dtype=object),
+        metadata=np.asarray(
+            {"expert_episode_counts": expert_episode_counts,
+             "worker_id": worker_id,
+             "num_trajectories": len(trajectories)},
+            dtype=object,
+        ),
+    )
+    return str(temp_path)
+
+
+def _collect_parallel(
+    num_episodes,
+    save_path,
+    gamma,
+    trace_split,
+    trace_dir,
+    stats_path,
+    qoe_profile,
+    expert_policy,
+    expert_seed,
+    exclude_trace_files,
+    progress_interval,
+    workers,
+    **extra_config,
+):
+    """Multiprocess collection: each worker saves a temp npz, then merge."""
+    episodes_per_worker = [num_episodes // workers] * workers
+    for i in range(num_episodes % workers):
+        episodes_per_worker[i] += 1
+
+    active_workers = sum(1 for n in episodes_per_worker if n > 0)
+    config = {
+        "gamma": gamma,
+        "trace_split": trace_split,
+        "trace_dir": trace_dir,
+        "qoe_profile": qoe_profile,
+        "expert_policy": expert_policy,
+        "expert_seed": expert_seed,
+        "exclude_trace_files": exclude_trace_files or [],
+    }
+    config.update(extra_config)
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="abr_collect_"))
+    print(
+        f"[DataCollector] workers={active_workers} "
+        f"episodes_per_worker={episodes_per_worker[:active_workers]} "
+        f"temp_dir={temp_dir}"
+    )
+
+    try:
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(processes=active_workers) as pool:
+            args_list = [
+                (worker_id, episodes_per_worker[worker_id], str(temp_dir), config)
+                for worker_id in range(active_workers)
+            ]
+            temp_paths = pool.starmap(_worker_collect_episodes, args_list)
+
+        temp_paths = [Path(p) for p in temp_paths if p is not None]
+        if not temp_paths:
+            raise RuntimeError("No trajectories collected by any worker.")
+
+        # Merge temp npz files
+        all_trajectories = []
+        merged_counts = {"bola": 0, "mpc": 0, "high_mpc": 0}
+        for tp in temp_paths:
+            raw = np.load(tp, allow_pickle=True)
+            all_trajectories.extend(list(raw["trajectories"]))
+            meta = dict(raw["metadata"].item())
+            for key in ("bola", "mpc", "high_mpc"):
+                merged_counts[key] += int(meta.get("expert_episode_counts", {}).get(key, 0))
+
+        if not all_trajectories:
+            raise RuntimeError("No trajectories collected by any worker.")
+
+        total_samples = sum(len(t["actions"]) for t in all_trajectories)
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        metadata = {
+            "expert_policy": expert_policy,
+            "expert_episode_counts": merged_counts,
+            "mpc_ratio": float(config.get("mpc_ratio", 0.35)),
+            "high_bitrate_ratio": float(config.get("high_bitrate_ratio", 0.0)),
+            "mpc_safety_factor": float(config.get("mpc_safety_factor", 0.9)),
+            "high_mpc_safety_factor": float(config.get("high_mpc_safety_factor", 1.1)),
+            "high_mpc_min_buffer": float(config.get("high_mpc_min_buffer", 8.0)),
+            "high_mpc_max_stall": float(config.get("high_mpc_max_stall", 0.25)),
+            "high_mpc_jump_limit": int(config.get("high_mpc_jump_limit", 1)),
+            "trace_filter": str(config.get("trace_filter", "all")),
+            "filtered_trace_count": 0,
+            "min_mean_throughput_kbps": float(config.get("min_mean_throughput_kbps", 5000.0)),
+            "high_bandwidth_percentile": float(config.get("high_bandwidth_percentile", 70.0)),
+            "excluded_trace_count": len(config.get("exclude_trace_files", []) or []),
+            "excluded_trace_names": sorted(
+                Path(t).name for t in (config.get("exclude_trace_files") or [])
+            ),
+            "download_model": "time_integrated_trace_payload_0.95_rtt_0.08",
+            "trace_split": trace_split or os.environ.get("ABR_TRACE_SPLIT", "train"),
+            "trace_dir": "parallel",
+            "qoe_profile": qoe_profile,
+            "num_episodes": int(num_episodes),
+            "gamma": float(gamma),
+            "workers": int(workers),
+        }
+        np.savez_compressed(
+            save_path,
+            trajectories=np.asarray(all_trajectories, dtype=object),
+            metadata=np.asarray(metadata, dtype=object),
+        )
+
+        init_returns = [float(t["returns"][0]) for t in all_trajectories]
+        actions = np.concatenate([t["actions"] for t in all_trajectories])
+        rewards = np.concatenate([t["rewards"] for t in all_trajectories])
+        num_bitrates = max(int(actions.max()) + 1, 6) if actions.size else 6
+        action_counts = np.bincount(actions, minlength=num_bitrates)
+        stats = {
+            **metadata,
+            "save_path": str(save_path),
+            "num_trajectories": len(all_trajectories),
+            "num_samples": int(total_samples),
+            "action_counts": {
+                str(idx): int(action_counts[idx])
+                for idx in range(len(action_counts))
+            },
+            "reward_min": float(rewards.min()),
+            "reward_mean": float(rewards.mean()),
+            "reward_max": float(rewards.max()),
+            "return_min": float(min(init_returns)),
+            "return_mean": float(np.mean(init_returns)),
+            "return_max": float(max(init_returns)),
+        }
+        stats_path = Path(stats_path) if stats_path else save_path.with_suffix(".stats.json")
+        stats_path.write_text(
+            json.dumps(stats, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        print(
+            f"[DataCollector] saved {len(all_trajectories)} trajectories, "
+            f"{total_samples} samples -> {save_path}"
+        )
+        print(
+            f"[DataCollector] raw return stats: "
+            f"max={max(init_returns):.2f}, "
+            f"mean={np.mean(init_returns):.2f}, "
+            f"min={min(init_returns):.2f}"
+        )
+        print(f"[DataCollector] saved stats -> {stats_path}")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def collect_expert_trajectories(
     num_episodes=100,
     save_path="expert_data.npz",
@@ -196,7 +457,38 @@ def collect_expert_trajectories(
     high_bandwidth_percentile=70.0,
     exclude_trace_files=None,
     progress_interval=10,
+    workers=1,
 ):
+    expert_policy = str(expert_policy).strip().lower().replace("-", "_")
+
+    if int(workers) > 1:
+        return _collect_parallel(
+            num_episodes=int(num_episodes),
+            save_path=Path(save_path),
+            gamma=float(gamma),
+            trace_split=trace_split,
+            trace_dir=trace_dir,
+            stats_path=stats_path,
+            qoe_profile=qoe_profile,
+            expert_policy=expert_policy,
+            expert_seed=int(expert_seed),
+            exclude_trace_files=exclude_trace_files,
+            progress_interval=int(progress_interval),
+            workers=int(workers),
+            # Pass all config through so workers see the same settings.
+            mpc_ratio=float(mpc_ratio),
+            high_bitrate_ratio=float(high_bitrate_ratio),
+            mpc_safety_factor=float(mpc_safety_factor),
+            high_mpc_safety_factor=float(high_mpc_safety_factor),
+            high_mpc_min_buffer=float(high_mpc_min_buffer),
+            high_mpc_max_stall=float(high_mpc_max_stall),
+            high_mpc_jump_limit=int(high_mpc_jump_limit),
+            trace_filter=trace_filter,
+            min_mean_throughput_kbps=float(min_mean_throughput_kbps),
+            high_bandwidth_percentile=float(high_bandwidth_percentile),
+        )
+
+    # --- serial path (workers == 1) ---
     env = ABREnv(trace_split=trace_split, trace_dir=trace_dir, qoe_profile=qoe_profile)
     excluded_trace_names = {
         Path(trace_file).name
@@ -226,7 +518,6 @@ def collect_expert_trajectories(
     trajectories = []
     total_samples = 0
     rng = random.Random(expert_seed)
-    expert_policy = str(expert_policy).strip().lower().replace("-", "_")
     expert_episode_counts = {"bola": 0, "mpc": 0, "high_mpc": 0}
 
     print(
@@ -417,6 +708,7 @@ if __name__ == "__main__":
     parser.add_argument("--exclude-trace-file", action="append", default=[])
     parser.add_argument("--exclude-trace-list", default=None)
     parser.add_argument("--progress-interval", type=int, default=10)
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
     exclude_trace_files = list(args.exclude_trace_file or [])
     exclude_trace_files.extend(read_trace_list(args.exclude_trace_list))
@@ -442,4 +734,5 @@ if __name__ == "__main__":
         high_bandwidth_percentile=args.high_bandwidth_percentile,
         exclude_trace_files=exclude_trace_files,
         progress_interval=args.progress_interval,
+        workers=args.workers,
     )

@@ -274,6 +274,7 @@ def collect_data(config, paths, validation_traces):
             ),
             exclude_trace_files=exclude_files,
             progress_interval=int(data_cfg.get("progress_interval", 10)),
+            workers=int(item.get("workers", data_cfg.get("workers", 1))),
         )
         datasets.append(save_path)
 
@@ -390,7 +391,10 @@ def train_sft_stage(config, paths, data_path):
         target_return_scale=float(common(config, "target_return_scale", 1.0)),
         class_weight_power=float(sft.get("class_weight_power", 0.25)),
         max_class_weight=float(sft.get("max_class_weight", 3.0)),
+        batch_size=int(sft.get("batch_size", common(config, "batch_size", 8))),
+        num_workers=int(sft.get("num_workers", common(config, "num_workers", 0))),
         validation_episodes=int(sft.get("validation_episodes", validation(config, "episodes", 10))),
+        validation_batch_size=int(sft.get("validation_batch_size", common(config, "validation_batch_size", 8))),
         validation_split=sft.get("validation_split", validation(config, "split", common(config, "trace_split", "train"))),
         validation_trace_dir=sft.get("validation_trace_dir", validation(config, "trace_dir", common(config, "trace_dir", None))),
         validation_sample_mode=sft.get("validation_sample_mode", validation(config, "sample_mode", "stratified")),

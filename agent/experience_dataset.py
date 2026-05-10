@@ -140,3 +140,33 @@ class ABRExperienceDataset:
             running = float(rewards[idx]) + self.gamma * running
             returns[idx] = running / self.return_scale
         return returns
+
+
+def collate_abr_samples(batch):
+    """Collate a variable-length ABR sample list into a right-padded batch.
+
+    Returns tensors ready for NetLLMABR.forward():
+        states  [B, T_max, 6, 6]
+        actions [B, T_max]
+        returns [B, T_max]
+        timesteps [B, T_max]
+        mask    [B, T_max]  1.0 for real tokens, 0.0 for padding
+    """
+    max_len = max(s["states"].shape[0] for s in batch)
+    B = len(batch)
+
+    states = np.zeros((B, max_len, 6, 6), dtype=np.float32)
+    actions = np.zeros((B, max_len), dtype=np.int64)
+    returns = np.zeros((B, max_len), dtype=np.float32)
+    timesteps = np.zeros((B, max_len), dtype=np.int64)
+    mask = np.zeros((B, max_len), dtype=np.float32)
+
+    for i, s in enumerate(batch):
+        T = s["states"].shape[0]
+        states[i, :T] = s["states"]
+        actions[i, :T] = s["actions"]
+        returns[i, :T] = s["returns"]
+        timesteps[i, :T] = s["timesteps"]
+        mask[i, :T] = 1.0
+
+    return states, actions, returns, timesteps, mask
