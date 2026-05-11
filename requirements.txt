@@ -10,3 +10,5 @@ transformers
 peft
 safetensors
 PyYAML
+bitsandbytes>=0.46.1
+accelerate
