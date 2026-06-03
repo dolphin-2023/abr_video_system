@@ -1,0 +1,151 @@
+# Full-scale external_mix training from scratch.
+# Build a 5-chunk local best-of-BOLA/MPC/BBA expert pool, train SFT, then
+# initialize offline RL from that run's SFT checkpoint with a low-buffer
+# safety regularizer.
+
+run:
+  name: train_external_mix_selected_expert_window5_safety
+  root: runs
+  log_to_file: true
+  log_name: train.log
+
+env:
+  llm_path:
+  chunk_size_path: assets/example_chunk_sizes.json
+  env_verbose: false
+
+runtime:
+  torch_num_threads:
+  torch_num_interop_threads:
+  gradient_checkpointing: true
+
+common:
+  qoe_profile: pensieve
+  trace_split: external_mix_train
+  trace_dir:
+  # Keep the model training/inference context at the full-scale setting.
+  window: 20
+  context_len: 20
+  sample_step: 5
+  # Full-scale external_mix RTG settings.
+  return_scale: 1000.0
+  reward_normalization: minmax
+  reward_percentile_low: 0.0
+  reward_percentile_high: 100.0
+  clip_normalized_reward: true
+  target_return_scale: 1.0
+
+validation:
+  episodes: 32
+  split: external_mix_valid
+  trace_dir:
+  sample_mode: stratified
+  seed: 20260517
+
+data:
+  reuse_existing: false
+  collection_mode: selected
+  combined_name: expert_selected_window5.npz
+  progress_interval: 20
+  selected:
+    save_name: expert_selected_window5.npz
+    trace_split: external_mix_train
+    expert_policies: [bola, mpc, bba]
+    bba_reservoir: 5.0
+    bba_cushion: 15.0
+    mpc_safety_factor: 0.9
+    selection_unit: window
+    # Expert QoE comparison horizon; independent of the per-state PAST_K=6.
+    selection_window: 5
+    selection_stride: 1
+    # Keep difficult and negative-return windows; do not hide weak-network cases.
+    negative_return_weight: 1.0
+    positive_return_weight: 1.0
+    progress_interval: 20
+    seed: 20260517
+
+sft:
+  save_name: sft
+  model_path: models/netllm_sft_external_mix_selected_expert_window5_safety
+  stats_name: training_stats_external_mix_selected_expert_window5_safety.json
+  stats_path: models/training_stats_external_mix_selected_expert_window5_safety.json
+  epochs: 14
+  min_epochs: 4
+  early_stop_patience: 4
+  batch_size: 8
+  num_workers: 4
+  validation_batch_size: 16
+  class_weight_power: 0.45
+  max_class_weight: 6.0
+  validation_episodes: 32
+  progress_interval: 100
+  validation_progress_interval: 0
+
+offline_rl:
+  enabled: true
+  init_from_sft: true
+  save_name: offline_rl
+  model_path: models/netllm_offline_rl_external_mix_selected_expert_window5_safety
+  stats_name: training_stats_external_mix_selected_expert_window5_safety.json
+  epochs: 8
+  min_epochs: 4
+  early_stop_patience: 4
+  batch_size: 1
+  accumulation_steps: 8
+  lr: 5.0e-5
+  weight_decay: 1.0e-4
+  warmup_steps: 300
+  grad_clip: 0.25
+  train_scope: non_plm_lora
+  class_weight_power: 0.25
+  max_class_weight: 4.0
+  high_return_weight: 0.65
+  # safe_action_max=1 produces squared overshoot penalties:
+  # a0=0, a1=0, a2=1, a3=4, a4=9, a5=16.
+  safety_penalty_weight: 0.5
+  safety_buffer_threshold: 4.0
+  safety_safe_action_max: 1
+  target_return_scale: 1.0
+  validation_episodes: 32
+  validation_batch_size: 8
+  progress_interval: 100
+  validation_progress_interval: 0
+
+# This recipe intentionally stops after offline RL and evaluation.
+rl:
+  enabled: false
+
+pensieve:
+  enabled: false
+
+eval:
+  enabled: true
+  smoke:
+    enabled: false
+    output_name: evaluation_smoke20.json
+    trace_split: external_mix_valid
+    episodes: 20
+    sample_mode: stratified
+    policies: [bola, mpc, netllm-sft, netllm-offline-rl]
+    progress_interval: 10
+  final:
+    enabled: true
+    output_name: evaluation_original_test200.json
+    trace_split: test
+    episodes: 200
+    sample_mode: stratified
+    policies: [bola, mpc, netllm-sft, netllm-offline-rl]
+    progress_interval: 20
+  external_holdout:
+    enabled: true
+    output_name: evaluation_external_mix_holdout.json
+    trace_split: external_mix_test
+    trace_dir:
+    episodes: 82
+    sample_mode: stratified
+    policies: [bola, mpc, netllm-sft, netllm-offline-rl]
+    progress_interval: 20
+  external_puffer_recent:
+    enabled: false
+  external_weak_mobile:
+    enabled: false

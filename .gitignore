@@ -1,0 +1,48 @@
+# Python caches and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environments and secrets
+.env
+.venv/
+venv/
+
+# Raw and generated network trace data
+data/raw/
+simulator/traces/*
+!simulator/traces/README.md
+
+# Generated videos
+processor/uploads/
+processor/dash_output/
+
+# Generated experiment output
+agent/runs/
+agent/logs/
+agent/ppo_abr_tensorboard/
+agent/models/
+agent/assets/*.local.json
+agent/expert_*.npz
+agent/expert_*.stats.json
+outputs/
+
+# Local base models
+/models/
+
+# Local documents and papers
+*.pdf
+*.docx
+docs/references/
+docs/thesis/
+
+# Editor and operating system files
+.idea/
+.vscode/
+*.lnk
+.DS_Store
+Thumbs.db

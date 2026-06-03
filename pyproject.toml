@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abr-video-system"
+version = "0.1.0"
+description = "Trace-driven adaptive bitrate video streaming research prototype."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
+  "httpx",
+  "numpy",
+  "pandas",
+  "gymnasium",
+  "torch",
+  "transformers",
+  "peft",
+  "safetensors",
+  "PyYAML",
+  "accelerate",
+]
+
+[project.optional-dependencies]
+gpu = [
+  "bitsandbytes>=0.46.1",
+]
+dev = [
+  "coverage",
+  "ruff",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+  "simulator/traces",
+  "agent/runs",
+  "processor/uploads",
+  "processor/dash_output",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+omit = [
+  "simulator/traces/*",
+  "agent/runs/*",
+]

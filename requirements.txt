@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+numpy
+pandas
+gymnasium
+torch
+transformers
+peft
+safetensors
+PyYAML
+accelerate
