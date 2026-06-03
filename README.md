@@ -7,9 +7,9 @@ NetLLM 风格策略训练、多种基线策略对比、统一评估框架以及�
 
 ## 项目特性
 
-- 基于真实网络 trace 的 Pensieve 风格 ABR 模拟环境
-- BOLA、MPC、BBA、随机策略以及 PyTorch Pensieve 基线
-- NetLLM 风格的监督微调（SFT）、离线强化学习以及可选的在线强化学习
+- 基于真实网络 trace 的 ABR 模拟环境
+- BOLA、MPC、BBA、随机策略以及 PyTorch 仿 Pensieve 基线
+- NetLLM 的监督微调（SFT）、离线学习以及在线强化学习
 - 确定性的内部和外部 trace 数据准备工具
 - 自包含的实验运行目录，便于训练与评估产物的管理
 - 本地 MP4 转 DASH 的转码服务、trace 驱动的限速代理以及浏览器播放控制台
