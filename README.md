@@ -50,7 +50,7 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-gpu.txt
 ```
 
-设置本地 Hugging Face 基座模型目录：
+设置本地基座模型目录：
 
 ```powershell
 # Windows PowerShell
